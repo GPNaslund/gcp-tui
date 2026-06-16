@@ -24,7 +24,81 @@ func secretsCmd() *cobra.Command {
 	}
 	cmd.AddCommand(secretsPullCmd())
 	cmd.AddCommand(secretsDiffCmd())
+	cmd.AddCommand(secretsSetCmd())
 	return cmd
+}
+
+func secretsSetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <env> <secret-name>",
+		Short: "Add a new version of a secret, creating it if missing",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runSet(args[0], args[1])
+		},
+	}
+}
+
+func runSet(envName, name string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	env, ok := cfg.Find(envName)
+	if !ok {
+		return fmt.Errorf("no environment %q; run `gcp-tui list`", envName)
+	}
+
+	if _, err := doctor.Ensure(true); err != nil {
+		return err
+	}
+
+	exists, err := secretmanager.Exists(env.Project, name)
+	if err != nil {
+		return err
+	}
+
+	// PROD GATE: must run before any Create or AddVersion.
+	if env.Confirm {
+		fmt.Printf("About to set secret %q in project %s.\n", name, env.Project)
+		if !typedConfirm(env.Name) {
+			return fmt.Errorf("aborted: confirmation did not match %q", env.Name)
+		}
+	}
+
+	if !exists {
+		create := false
+		if ferr := huh.NewForm(huh.NewGroup(
+			huh.NewConfirm().
+				Title(fmt.Sprintf("Secret %q not found in %s. Create it?", name, env.Project)).
+				Value(&create),
+		)).Run(); ferr != nil || !create {
+			return fmt.Errorf("aborted")
+		}
+		if err := secretmanager.Create(env.Project, name); err != nil {
+			return err
+		}
+	}
+
+	var value string
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewInput().
+			Title("Secret value").
+			EchoMode(huh.EchoModePassword).
+			Value(&value),
+	)).Run(); err != nil {
+		return err
+	}
+	if value == "" {
+		return fmt.Errorf("aborted: empty value")
+	}
+
+	version, err := secretmanager.AddVersion(env.Project, name, []byte(value))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Added version %s of %s in %s\n", version, name, env.Project)
+	return nil
 }
 
 func secretsDiffCmd() *cobra.Command {
