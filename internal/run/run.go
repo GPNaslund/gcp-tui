@@ -4,6 +4,7 @@
 package run
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,6 +26,17 @@ func Echo(name string, args ...string) {
 func Output(name string, args ...string) ([]byte, error) {
 	Echo(name, args...)
 	cmd := exec.Command(name, args...)
+	cmd.Stderr = os.Stderr
+	return cmd.Output()
+}
+
+// OutputInput runs a command with input piped to its stdin, echoing only the
+// command — never the input. Use this for secret payloads so the value is never
+// visible in the process list or the echoed command line.
+func OutputInput(input []byte, name string, args ...string) ([]byte, error) {
+	Echo(name, args...)
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = bytes.NewReader(input)
 	cmd.Stderr = os.Stderr
 	return cmd.Output()
 }
