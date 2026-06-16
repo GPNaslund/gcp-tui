@@ -159,6 +159,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "i":
 		return m, execSelf("init")
+	case "s":
+		if e := m.selectedEnv(); e != nil {
+			return m, execSelf("secrets", "pull", e.Name)
+		}
 	case "d":
 		m.doc, _ = doctor.Inspect()
 		m.refreshLive()
@@ -368,7 +372,7 @@ func (m Model) renderFooter(width int) string {
 	case focusConfirm:
 		help = "type the env name · ⏎ confirm · esc cancel"
 	default:
-		help = "↑↓ move · ⏎ tunnel · c copy · p profile · i discover · d doctor · q quit"
+		help = "↑↓ move · ⏎ tunnel · c copy · p profile · i discover · s pull · d doctor · q quit"
 	}
 	toast := " "
 	if m.toast != "" {
