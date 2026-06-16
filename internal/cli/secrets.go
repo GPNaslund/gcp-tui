@@ -23,7 +23,111 @@ func secretsCmd() *cobra.Command {
 		Short: "Secret Manager operations scoped to an environment's project",
 	}
 	cmd.AddCommand(secretsPullCmd())
+	cmd.AddCommand(secretsDiffCmd())
 	return cmd
+}
+
+func secretsDiffCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "diff <env-a> <env-b>",
+		Short: "Compare secret names between two environments",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runDiff(args[0], args[1])
+		},
+	}
+}
+
+func runDiff(envAName, envBName string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	envA, ok := cfg.Find(envAName)
+	if !ok {
+		return fmt.Errorf("no environment %q; run `gcp-tui list`", envAName)
+	}
+	envB, ok := cfg.Find(envBName)
+	if !ok {
+		return fmt.Errorf("no environment %q; run `gcp-tui list`", envBName)
+	}
+
+	if _, err := doctor.Ensure(true); err != nil {
+		return err
+	}
+
+	aSecrets, err := secretmanager.List(envA.Project)
+	if err != nil {
+		return err
+	}
+	bSecrets, err := secretmanager.List(envB.Project)
+	if err != nil {
+		return err
+	}
+
+	aNames := make([]string, len(aSecrets))
+	for i, s := range aSecrets {
+		aNames[i] = s.Name
+	}
+	bNames := make([]string, len(bSecrets))
+	for i, s := range bSecrets {
+		bNames[i] = s.Name
+	}
+
+	onlyA, onlyB, both := diffNames(aNames, bNames)
+
+	fmt.Printf("Only in %s (%d):\n", envA.Name, len(onlyA))
+	for _, n := range onlyA {
+		fmt.Printf("  %s\n", n)
+	}
+	fmt.Printf("Only in %s (%d):\n", envB.Name, len(onlyB))
+	for _, n := range onlyB {
+		fmt.Printf("  %s\n", n)
+	}
+	fmt.Printf("In both (%d):\n", len(both))
+	for _, n := range both {
+		fmt.Printf("  %s\n", n)
+	}
+	return nil
+}
+
+// diffNames performs a pure set-compare of two name lists.
+// It returns onlyA (names only in a), onlyB (names only in b), and both
+// (names present in both). Each returned slice is sorted ascending and deduped.
+func diffNames(a, b []string) (onlyA, onlyB, both []string) {
+	setA := make(map[string]bool, len(a))
+	for _, n := range a {
+		setA[n] = true
+	}
+	setB := make(map[string]bool, len(b))
+	for _, n := range b {
+		setB[n] = true
+	}
+
+	union := make(map[string]bool, len(setA)+len(setB))
+	for n := range setA {
+		union[n] = true
+	}
+	for n := range setB {
+		union[n] = true
+	}
+
+	for n := range union {
+		inA, inB := setA[n], setB[n]
+		switch {
+		case inA && inB:
+			both = append(both, n)
+		case inA:
+			onlyA = append(onlyA, n)
+		default:
+			onlyB = append(onlyB, n)
+		}
+	}
+
+	sort.Strings(onlyA)
+	sort.Strings(onlyB)
+	sort.Strings(both)
+	return onlyA, onlyB, both
 }
 
 func secretsPullCmd() *cobra.Command {
