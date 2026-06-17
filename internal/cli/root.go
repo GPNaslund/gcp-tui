@@ -18,6 +18,6 @@ func Execute() error {
 			return runTUI()
 		},
 	}
-	root.AddCommand(initCmd(), doctorCmd(), upCmd(), listCmd(), profileCmd(), connCmd(), secretsCmd())
+	root.AddCommand(initCmd(), doctorCmd(), upCmd(), downCmd(), listCmd(), profileCmd(), connCmd(), secretsCmd())
 	return root.Execute()
 }

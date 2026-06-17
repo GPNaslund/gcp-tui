@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,41 @@ func SlotBusy(e config.Env) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// ListenerPIDs returns the PIDs of processes listening on the env's reserved
+// address:port, using lsof. An empty slice means the slot is free. Returns an
+// error only if lsof is absent from PATH; a non-zero lsof exit (no matches) is
+// treated as the free case, not an error.
+func ListenerPIDs(e config.Env) ([]int, error) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		return nil, fmt.Errorf("lsof not found on PATH; cannot locate the listener on %s:%d", e.Address, e.Port)
+	}
+	out, _ := exec.Command(
+		"lsof", "-nP",
+		fmt.Sprintf("-iTCP@%s:%d", e.Address, e.Port),
+		"-sTCP:LISTEN", "-t",
+	).Output()
+	return parsePIDs(string(out)), nil
+}
+
+// parsePIDs parses the output of `lsof -t` (bare PIDs, one per line) into
+// []int. Blank lines and non-numeric lines are silently skipped. This is the
+// pure, unit-testable core of ListenerPIDs.
+func parsePIDs(out string) []int {
+	var pids []int
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		n, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		pids = append(pids, n)
+	}
+	return pids
 }
 
 func banner(e config.Env) string {
