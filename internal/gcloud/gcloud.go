@@ -108,6 +108,25 @@ func ADCValid() (bool, error) {
 	return true, nil
 }
 
+// AccountValid reports whether the active gcloud user credential can currently
+// mint an access token. ActiveAccount only proves a credential is stored and
+// marked ACTIVE — `gcloud auth list` still succeeds when the token needs
+// Google's periodic reauthentication, which every real gcloud call then fails
+// with "Reauthentication failed". Asking gcloud to print a token forces that
+// refresh, so it is the only reliable probe (the user-credential analogue of
+// ADCValid). A non-zero exit means the token can't be minted (expired or reauth
+// required) — that is the answer, not an error to propagate.
+func AccountValid() (bool, error) {
+	if _, err := run.Output("gcloud", "auth", "print-access-token"); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // ListProjects returns the projects the active account can enumerate.
 func ListProjects() ([]Project, error) {
 	out, err := run.Output("gcloud", "projects", "list", "--format=json")

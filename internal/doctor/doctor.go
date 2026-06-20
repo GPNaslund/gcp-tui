@@ -20,6 +20,7 @@ type Result struct {
 	PsqlInstalled   bool
 	ActiveAccount   string
 	HasAccount      bool
+	AccountValid    bool
 	HasADC          bool
 	ADCValid        bool
 }
@@ -44,6 +45,13 @@ func Inspect() (Result, error) {
 		return r, err
 	}
 	r.ActiveAccount, r.HasAccount = acc, ok
+	if ok {
+		valid, err := gcloud.AccountValid()
+		if err != nil {
+			return r, err
+		}
+		r.AccountValid = valid
+	}
 
 	adc, err := gcloud.ADCExists()
 	if err != nil {
@@ -79,6 +87,14 @@ func Ensure(interactive bool) (Result, error) {
 			}
 		} else {
 			return r, fmt.Errorf("no active gcloud account; run: gcloud auth login")
+		}
+	} else if !r.AccountValid {
+		if interactive && confirm("Your gcloud account is logged in but its credentials are expired or need reauthentication (real gcloud calls will fail). Run `gcloud auth login` now?") {
+			if err := run.Inherit("gcloud", "auth", "login"); err != nil {
+				return r, err
+			}
+		} else {
+			return r, fmt.Errorf("gcloud account credentials need reauthentication; run: gcloud auth login")
 		}
 	}
 

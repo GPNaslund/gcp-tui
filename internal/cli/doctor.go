@@ -28,10 +28,13 @@ func printDoctor(r doctor.Result) {
 	fmt.Println(check(r.GcloudInstalled), "gcloud CLI")
 	fmt.Println(check(r.ProxyInstalled), "cloud-sql-proxy")
 	fmt.Println(check(r.PsqlInstalled), "psql (optional)")
-	if r.HasAccount {
-		fmt.Println(check(true), "gcloud account:", r.ActiveAccount)
-	} else {
+	switch {
+	case !r.HasAccount:
 		fmt.Println(check(false), "no active gcloud account")
+	case !r.AccountValid:
+		fmt.Println(check(false), "gcloud account:", r.ActiveAccount, "— expired; run: gcloud auth login")
+	default:
+		fmt.Println(check(true), "gcloud account:", r.ActiveAccount)
 	}
 	switch {
 	case !r.HasADC:
