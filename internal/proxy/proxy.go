@@ -5,11 +5,11 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -133,51 +133,39 @@ func Start(e config.Env) error {
 	}
 }
 
-// LogFilePath returns the per-env log file path under the user cache dir
-// (UserCacheDir/gcp-tui/<env>.log), creating the directory with owner-only
-// permissions. Background tunnels stream their output here since, unlike the
-// foreground Start, they have no terminal to write to.
-func LogFilePath(e config.Env) (string, error) {
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(cache, "gcp-tui")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, e.Name+".log"), nil
-}
-
 // StartBackground launches cloud-sql-proxy bound to the env's reserved slot as a
-// non-blocking child process, streaming its output to a per-env log file. Unlike
-// Start it does not Wait — the caller owns the returned cmd's lifetime (it must
-// Wait on it elsewhere and SIGTERM it on shutdown). Multiple background tunnels
+// non-blocking child process, streaming its combined stdout+stderr through a pipe
+// the caller reads. Unlike Start it does not Wait — the caller owns the returned
+// cmd's lifetime (it must Wait on it elsewhere and SIGTERM it on shutdown) and
+// must Close the returned reader. The caller MUST drain the reader continuously,
+// or the pipe fills and the proxy blocks on write. Multiple background tunnels
 // can run at once.
-func StartBackground(e config.Env) (*exec.Cmd, error) {
+//
+// Both cmd.Stdout and cmd.Stderr are wired to a single os.Pipe write end so the
+// proxy's output is interleaved in order. After Start the parent closes its copy
+// of the write end (the child keeps its own dup), so the reader gets EOF when the
+// proxy exits and the read loop terminates instead of blocking forever.
+func StartBackground(e config.Env) (*exec.Cmd, io.ReadCloser, error) {
 	if SlotBusy(e) {
-		return nil, fmt.Errorf("refusing to start: %s:%d already has a listener (stale proxy or another process); free it first", e.Address, e.Port)
+		return nil, nil, fmt.Errorf("refusing to start: %s:%d already has a listener (stale proxy or another process); free it first", e.Address, e.Port)
 	}
 
-	path, err := LogFilePath(e)
+	pr, pw, err := os.Pipe()
 	if err != nil {
-		return nil, err
-	}
-	logFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	cmd := Command(e)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	// Record the exact command into the log file (not stderr): the cockpit runs in
-	// the alt-screen, so echoing "$ cloud-sql-proxy ..." to stderr would corrupt the
-	// rendered TUI. The log keeps the same transparency without touching the screen.
-	fmt.Fprintln(logFile, "$ "+strings.Join(cmd.Args, " "))
+	cmd.Stdout = pw
+	cmd.Stderr = pw
 	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		return nil, err
+		_ = pw.Close()
+		_ = pr.Close()
+		return nil, nil, err
 	}
-	return cmd, nil
+	// The child inherited its own dup of the write end on Start; the parent must
+	// close its copy so the reader sees EOF once the proxy exits (otherwise the
+	// read loop blocks on a write end that never closes).
+	_ = pw.Close()
+	return cmd, pr, nil
 }

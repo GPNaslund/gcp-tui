@@ -7,7 +7,9 @@
 package tui
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -26,6 +28,11 @@ import (
 	"github.com/gpnaslund/gcp-tui/internal/secret"
 )
 
+// maxTunnelLines caps the per-env streamed-output ring buffer so a long-running
+// proxy can't grow the cockpit's memory without bound. The oldest lines are
+// dropped once the cap is hit.
+const maxTunnelLines = 1000
+
 type focusZone int
 
 const (
@@ -33,6 +40,17 @@ const (
 	focusProfiles
 	focusConfirm
 )
+
+// tunnel is one tracked background proxy this cockpit started: the running cmd,
+// the reader draining its combined stdout+stderr, a persistent bufio.Reader over
+// that reader (kept on the struct, not re-created per read, so no buffered bytes
+// are lost between reads), and the captured output as a ring-capped line buffer.
+type tunnel struct {
+	cmd    *exec.Cmd
+	reader io.ReadCloser
+	buf    *bufio.Reader
+	lines  []string
+}
 
 // Model is the cockpit state.
 type Model struct {
@@ -42,7 +60,13 @@ type Model struct {
 
 	// tunnels tracks background proxies this cockpit started, keyed by env name.
 	// They are session-scoped: killAllTunnels SIGTERMs every entry on quit.
-	tunnels map[string]*exec.Cmd
+	tunnels map[string]*tunnel
+
+	// panelTunnelEnv names the env whose live tunnel log the panel currently shows
+	// (empty when the panel shows something else or is closed). tunnelLogMsg only
+	// updates the viewport when its env matches this, so background draining of a
+	// closed tunnel never disturbs another panel.
+	panelTunnelEnv string
 
 	w, h    int
 	envIdx  int
@@ -58,6 +82,15 @@ type Model struct {
 type tunnelExitedMsg struct {
 	env string
 	err error
+}
+
+// tunnelLogMsg carries one line of a tunnel's streamed output back into Update.
+// err is non-nil at end of stream (io.EOF when the proxy exited and closed its
+// write end); on err the read loop stops re-issuing readTunnelLine.
+type tunnelLogMsg struct {
+	env  string
+	line string
+	err  error
 }
 type reloadMsg struct{}
 
@@ -89,7 +122,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tunnelExitedMsg:
+		if t := m.tunnels[msg.env]; t != nil && t.reader != nil {
+			_ = t.reader.Close() // release the pipe fd; the read loop already saw EOF
+		}
 		delete(m.tunnels, msg.env)
+		if m.panelTunnelEnv == msg.env {
+			m.panelTunnelEnv = ""
+		}
 		m.refreshLive()
 		if msg.err != nil {
 			m.toast = "tunnel exited: " + msg.env + " (" + msg.err.Error() + ")"
@@ -97,6 +136,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toast = "tunnel exited: " + msg.env
 		}
 		return m, nil
+	case tunnelLogMsg:
+		return m.handleTunnelLog(msg)
 	case reloadMsg:
 		if cfg, err := config.Load(); err == nil {
 			m.cfg = cfg
@@ -188,6 +229,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.copyConn(e, m.selectedProfile())
 			return m, nil
 		}
+		// Already tracked → reopen its streaming log panel instead of restarting.
+		if m.tunnels[e.Name] != nil {
+			m.openTunnelPanel(e.Name)
+			return m, nil
+		}
 		if e.Confirm {
 			m.focus, m.confirmInput = focusConfirm, ""
 			return m, nil
@@ -212,6 +258,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "L":
 		if e := m.selectedEnv(); e != nil {
 			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panelTunnelEnv = ""
 			m.panel.title = "logs: " + e.Name
 			w, h := m.panelViewportSize()
 			m.panel.vp = viewport.New(w, h)
@@ -220,6 +267,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "D":
 		if e := m.selectedEnv(); e != nil {
 			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panelTunnelEnv = ""
 			m.panel.title = "databases: " + e.Name
 			w, h := m.panelViewportSize()
 			m.panel.vp = viewport.New(w, h)
@@ -228,6 +276,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "U":
 		if e := m.selectedEnv(); e != nil {
 			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panelTunnelEnv = ""
 			m.panel.title = "users: " + e.Name
 			w, h := m.panelViewportSize()
 			m.panel.vp = viewport.New(w, h)
@@ -236,6 +285,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "I":
 		if e := m.selectedEnv(); e != nil {
 			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panelTunnelEnv = ""
 			m.panel.title = "instance: " + e.Name
 			w, h := m.panelViewportSize()
 			m.panel.vp = viewport.New(w, h)
@@ -244,6 +294,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "B":
 		if e := m.selectedEnv(); e != nil {
 			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panelTunnelEnv = ""
 			m.panel.title = "backups: " + e.Name
 			w, h := m.panelViewportSize()
 			m.panel.vp = viewport.New(w, h)
@@ -251,10 +302,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "x":
 		if e := m.selectedEnv(); e != nil && m.live[e.Name] {
-			if cmd := m.tunnels[e.Name]; cmd != nil {
+			if t := m.tunnels[e.Name]; t != nil && t.cmd != nil && t.cmd.Process != nil {
 				// Tracked: SIGTERM it; its waitTunnel fires tunnelExitedMsg,
-				// which removes it from tracking and refreshes live state.
-				_ = cmd.Process.Signal(syscall.SIGTERM)
+				// which removes it from tracking, closes its reader, and
+				// refreshes live state.
+				_ = t.cmd.Process.Signal(syscall.SIGTERM)
 				m.toast = "stopping tunnel: " + e.Name
 				return m, nil
 			}
@@ -295,29 +347,70 @@ func (m *Model) copyConn(e *config.Env, p *config.Profile) {
 // the cockpit interactive, so several tunnels can be live at once. For confirm=true
 // envs it is only reached after focusConfirm (the interactive prod gate) has
 // validated the typed env name — it is never called directly on Enter for those
-// envs. The returned tea.Cmd waits on the proxy and emits tunnelExitedMsg when it
-// dies, which removes it from tracking.
+// envs. It auto-opens the streaming log panel and returns a batch of waitTunnel
+// (emits tunnelExitedMsg on death → drops it from tracking) and readTunnelLine
+// (drains the proxy's output, re-issued until EOF so the pipe never fills).
 func (m Model) startBackgroundTunnel(e config.Env) (tea.Model, tea.Cmd) {
 	if m.tunnels[e.Name] != nil {
 		m.toast = "tunnel already live: " + e.Name
 		return m, nil
 	}
-	cmd, err := proxy.StartBackground(e)
+	cmd, reader, err := proxy.StartBackground(e)
 	if err != nil {
 		m.toast = "tunnel failed: " + err.Error()
 		return m, nil
 	}
 	if m.tunnels == nil {
-		m.tunnels = make(map[string]*exec.Cmd)
+		m.tunnels = make(map[string]*tunnel)
 	}
-	m.tunnels[e.Name] = cmd
+	t := &tunnel{cmd: cmd, reader: reader, buf: bufio.NewReader(reader)}
+	m.tunnels[e.Name] = t
 	m.refreshLive()
-	if path, perr := proxy.LogFilePath(e); perr == nil {
-		m.toast = "tunnel up: " + e.Name + " (log: " + path + ")"
-	} else {
-		m.toast = "tunnel up: " + e.Name
+	m.openTunnelPanel(e.Name)
+	m.toast = "tunnel up: " + e.Name
+	return m, tea.Batch(waitTunnel(e.Name, cmd), readTunnelLine(e.Name, t.buf))
+}
+
+// openTunnelPanel shows the named env's streaming-log panel: it points
+// panelTunnelEnv at the env, titles the panel, and fills the viewport with the
+// lines captured so far (following the tail). Used both on tunnel start and when
+// reopening a live env's log with Enter.
+func (m *Model) openTunnelPanel(env string) {
+	t := m.tunnels[env]
+	if t == nil {
+		return
 	}
-	return m, waitTunnel(e.Name, cmd)
+	m.panel.open, m.panel.loading, m.panel.err = true, false, nil
+	m.panel.title = "tunnel: " + env
+	m.panelTunnelEnv = env
+	w, h := m.panelViewportSize()
+	m.panel.vp = viewport.New(w, h)
+	m.panel.vp.SetContent(strings.Join(t.lines, "\n"))
+	m.panel.vp.GotoBottom()
+}
+
+// handleTunnelLog appends one streamed line to its env's ring-capped buffer,
+// updates the viewport (following the tail) only when that env's panel is open,
+// and re-issues the read loop unless the stream ended (msg.err != nil → EOF).
+func (m Model) handleTunnelLog(msg tunnelLogMsg) (tea.Model, tea.Cmd) {
+	t := m.tunnels[msg.env]
+	if t == nil {
+		return m, nil // tunnel already gone; stop the loop
+	}
+	if msg.line != "" {
+		t.lines = append(t.lines, msg.line)
+		if len(t.lines) > maxTunnelLines {
+			t.lines = t.lines[len(t.lines)-maxTunnelLines:]
+		}
+		if m.panel.open && m.panelTunnelEnv == msg.env {
+			m.panel.vp.SetContent(strings.Join(t.lines, "\n"))
+			m.panel.vp.GotoBottom()
+		}
+	}
+	if msg.err != nil {
+		return m, nil // EOF (or read error): the proxy exited; tunnelExitedMsg cleans up
+	}
+	return m, readTunnelLine(msg.env, t.buf)
 }
 
 // waitTunnel blocks on the proxy's exit and reports it back to the cockpit as a
@@ -325,6 +418,18 @@ func (m Model) startBackgroundTunnel(e config.Env) (tea.Model, tea.Cmd) {
 // reflected in tracking and live state.
 func waitTunnel(env string, cmd *exec.Cmd) tea.Cmd {
 	return func() tea.Msg { return tunnelExitedMsg{env: env, err: cmd.Wait()} }
+}
+
+// readTunnelLine reads one line from the tunnel's persistent bufio.Reader off the
+// Update loop and returns it as a tunnelLogMsg. handleTunnelLog re-issues it on
+// each non-error message, so the proxy's output is drained continuously even when
+// the panel is closed — otherwise the pipe fills and the proxy blocks on write.
+// At EOF (the proxy closed its write end) err is set and the loop stops.
+func readTunnelLine(env string, buf *bufio.Reader) tea.Cmd {
+	return func() tea.Msg {
+		line, err := buf.ReadString('\n')
+		return tunnelLogMsg{env: env, line: strings.TrimRight(line, "\n"), err: err}
+	}
 }
 
 // killAllTunnels SIGTERMs every tracked background tunnel. The cockpit runs the
@@ -335,9 +440,9 @@ func waitTunnel(env string, cmd *exec.Cmd) tea.Cmd {
 // discarded, so calling it twice (e.g. from both the keystroke path and the quit
 // filter) is safe.
 func (m *Model) killAllTunnels() {
-	for _, cmd := range m.tunnels {
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
+	for _, t := range m.tunnels {
+		if t != nil && t.cmd != nil && t.cmd.Process != nil {
+			_ = t.cmd.Process.Signal(syscall.SIGTERM)
 		}
 	}
 }
@@ -379,10 +484,15 @@ func execSelf(args ...string) tea.Cmd {
 	return tea.ExecProcess(exec.Command(exe, args...), func(error) tea.Msg { return reloadMsg{} })
 }
 
+// refreshLive recomputes which envs show ● live. An env we track in m.tunnels
+// counts as live immediately — without that, a just-started tunnel would flicker
+// idle for the ~1s the proxy takes to authorize and bind the port, because the
+// SlotBusy probe races the bind. SlotBusy still covers untracked listeners (a
+// stale proxy or one this cockpit did not start).
 func (m *Model) refreshLive() {
 	m.live = make(map[string]bool, len(m.cfg.Envs))
 	for _, e := range m.cfg.Envs {
-		m.live[e.Name] = proxy.SlotBusy(e)
+		m.live[e.Name] = m.tunnels[e.Name] != nil || proxy.SlotBusy(e)
 	}
 }
 

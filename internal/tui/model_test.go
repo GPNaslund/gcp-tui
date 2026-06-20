@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"os/exec"
 	"strings"
 	"testing"
@@ -178,7 +180,7 @@ func TestOpenPanelDoesNotMoveEnvSelection(t *testing.T) {
 // idle, and the toast names the env (and the error on failure).
 func TestTunnelExitedMsgRemovesTracking(t *testing.T) {
 	m := sized(testModel())
-	m.tunnels = map[string]*exec.Cmd{"staging": {}}
+	m.tunnels = map[string]*tunnel{"staging": {cmd: &exec.Cmd{}}}
 	m.live["staging"] = true
 
 	out, _ := m.Update(tunnelExitedMsg{env: "staging", err: errors.New("boom")})
@@ -195,6 +197,94 @@ func TestTunnelExitedMsgRemovesTracking(t *testing.T) {
 	}
 }
 
+// TestRefreshLiveCountsTrackedTunnelBeforeBind is the live-indicator fix: an env
+// we track in m.tunnels shows ● live immediately, even though nothing listens on
+// its reserved slot yet (the proxy takes ~1s to authorize and bind). Without the
+// tracked-OR-SlotBusy check the env would flicker idle during that window.
+func TestRefreshLiveCountsTrackedTunnelBeforeBind(t *testing.T) {
+	m := sized(testModel())
+	// Nothing is bound to staging's slot (no real proxy in the test), so a
+	// SlotBusy-only check would report idle.
+	if m.live["staging"] {
+		t.Fatal("precondition: staging slot should be free in the test env")
+	}
+	m.tunnels = map[string]*tunnel{"staging": {cmd: &exec.Cmd{}}}
+	m.refreshLive()
+	if !m.live["staging"] {
+		t.Fatal("a tracked tunnel must count as live before the port binds")
+	}
+	if m.live["prod"] {
+		t.Fatal("an untracked env with a free slot must stay idle")
+	}
+}
+
+// TestTunnelLogMsgAppendsAndRingCaps proves the streamed output is captured into
+// the per-env buffer and that the buffer is capped (oldest dropped) so a chatty
+// long-running proxy can't grow memory without bound.
+func TestTunnelLogMsgAppendsAndRingCaps(t *testing.T) {
+	m := sized(testModel())
+	m.tunnels = map[string]*tunnel{"staging": {buf: bufio.NewReader(strings.NewReader(""))}}
+
+	out, _ := m.Update(tunnelLogMsg{env: "staging", line: "authorizing"})
+	m = out.(Model)
+	if got := m.tunnels["staging"].lines; len(got) != 1 || got[0] != "authorizing" {
+		t.Fatalf("tunnelLogMsg must append the line, got %v", got)
+	}
+
+	for i := 0; i < maxTunnelLines+50; i++ {
+		out, _ = m.Update(tunnelLogMsg{env: "staging", line: "line"})
+		m = out.(Model)
+	}
+	if got := len(m.tunnels["staging"].lines); got != maxTunnelLines {
+		t.Fatalf("buffer must ring-cap at %d lines, got %d", maxTunnelLines, got)
+	}
+}
+
+// TestTunnelLogMsgFollowsTailWhenPanelShown proves a streamed line lands in the
+// viewport (following the tail) only when that env's tunnel panel is the one
+// open; a line for a closed/other panel must not touch the viewport content.
+func TestTunnelLogMsgFollowsTailWhenPanelShown(t *testing.T) {
+	m := sized(testModel())
+	m.tunnels = map[string]*tunnel{"staging": {buf: bufio.NewReader(strings.NewReader(""))}}
+	m.openTunnelPanel("staging")
+	if m.panelTunnelEnv != "staging" || m.panel.title != "tunnel: staging" {
+		t.Fatalf("openTunnelPanel must point the panel at staging, got env=%q title=%q",
+			m.panelTunnelEnv, m.panel.title)
+	}
+
+	out, _ := m.Update(tunnelLogMsg{env: "staging", line: "Listening on 127.0.0.2:15433"})
+	m = out.(Model)
+	if !strings.Contains(m.View(), "Listening on 127.0.0.2:15433") {
+		t.Fatal("a streamed line must render in the open tunnel panel")
+	}
+
+	// A line for a different env must not bleed into the shown viewport.
+	m.tunnels["prod"] = &tunnel{buf: bufio.NewReader(strings.NewReader(""))}
+	out, _ = m.Update(tunnelLogMsg{env: "prod", line: "SECRET-PROD-LINE"})
+	m = out.(Model)
+	if strings.Contains(m.View(), "SECRET-PROD-LINE") {
+		t.Fatal("a line for a non-shown env must not update the visible viewport")
+	}
+}
+
+// TestTunnelLogMsgReissuesUntilEOF proves the read loop keeps draining: a non-EOF
+// message returns a follow-up read cmd (so the pipe never fills), and an EOF
+// message stops the loop (nil cmd).
+func TestTunnelLogMsgReissuesUntilEOF(t *testing.T) {
+	m := sized(testModel())
+	m.tunnels = map[string]*tunnel{"staging": {buf: bufio.NewReader(strings.NewReader(""))}}
+
+	_, cmd := m.Update(tunnelLogMsg{env: "staging", line: "still streaming"})
+	if cmd == nil {
+		t.Fatal("a non-EOF tunnelLogMsg must re-issue the read loop, else the pipe fills and the proxy blocks")
+	}
+
+	_, cmd = m.Update(tunnelLogMsg{env: "staging", line: "", err: io.EOF})
+	if cmd != nil {
+		t.Fatal("an EOF tunnelLogMsg must stop the read loop")
+	}
+}
+
 // TestKillAllTunnelsSIGTERMsTrackedProcess is the die-on-quit safety check: a
 // real short-lived child must actually receive SIGTERM from killAllTunnels.
 func TestKillAllTunnelsSIGTERMsTrackedProcess(t *testing.T) {
@@ -204,7 +294,7 @@ func TestKillAllTunnelsSIGTERMsTrackedProcess(t *testing.T) {
 	}
 
 	m := sized(testModel())
-	m.tunnels = map[string]*exec.Cmd{"staging": cmd}
+	m.tunnels = map[string]*tunnel{"staging": {cmd: cmd}}
 	m.killAllTunnels()
 
 	done := make(chan error, 1)
@@ -234,7 +324,7 @@ func TestQuitCleanupFilterSIGTERMsTrackedProcess(t *testing.T) {
 	}
 
 	m := sized(testModel())
-	m.tunnels = map[string]*exec.Cmd{"staging": cmd}
+	m.tunnels = map[string]*tunnel{"staging": {cmd: cmd}}
 
 	got := QuitCleanupFilter(m, tea.QuitMsg{})
 	if _, ok := got.(tea.QuitMsg); !ok {
