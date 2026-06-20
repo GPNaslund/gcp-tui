@@ -291,7 +291,7 @@ func (m Model) renderHeader(width int) string {
 		acct = "not logged in"
 	}
 	right := lipgloss.NewStyle().Foreground(muted).Render(acct) + "  " +
-		statusPill("ADC", m.doc.HasADC) + " " + statusPill("proxy", m.doc.ProxyInstalled)
+		statusPill("ADC", m.doc.HasADC && m.doc.ADCValid) + " " + statusPill("proxy", m.doc.ProxyInstalled)
 	rule := lipgloss.NewStyle().Foreground(line).Render(strings.Repeat("─", width))
 	return fitRow(title, right, width) + "\n" + rule
 }

@@ -33,5 +33,12 @@ func printDoctor(r doctor.Result) {
 	} else {
 		fmt.Println(check(false), "no active gcloud account")
 	}
-	fmt.Println(check(r.HasADC), "application default credentials (ADC)")
+	switch {
+	case !r.HasADC:
+		fmt.Println(check(false), "application default credentials (ADC)")
+	case !r.ADCValid:
+		fmt.Println(check(false), "application default credentials (ADC) — expired; run: gcloud auth application-default login")
+	default:
+		fmt.Println(check(true), "application default credentials (ADC)")
+	}
 }

@@ -21,6 +21,7 @@ type Result struct {
 	ActiveAccount   string
 	HasAccount      bool
 	HasADC          bool
+	ADCValid        bool
 }
 
 func have(bin string) bool {
@@ -49,6 +50,13 @@ func Inspect() (Result, error) {
 		return r, err
 	}
 	r.HasADC = adc
+	if adc {
+		valid, err := gcloud.ADCValid()
+		if err != nil {
+			return r, err
+		}
+		r.ADCValid = valid
+	}
 	return r, nil
 }
 
@@ -81,6 +89,14 @@ func Ensure(interactive bool) (Result, error) {
 			}
 		} else {
 			return r, fmt.Errorf("no application default credentials; run: gcloud auth application-default login")
+		}
+	} else if !r.ADCValid {
+		if interactive && confirm("Application Default Credentials are expired or need reauthentication (the proxy can't mint a token). Run `gcloud auth application-default login` now?") {
+			if err := run.Inherit("gcloud", "auth", "application-default", "login"); err != nil {
+				return r, err
+			}
+		} else {
+			return r, fmt.Errorf("application default credentials need reauthentication; run: gcloud auth application-default login")
 		}
 	}
 

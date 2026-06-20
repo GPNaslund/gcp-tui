@@ -23,7 +23,7 @@ func testModel() Model {
 		},
 	}}
 	return New(cfg, doctor.Result{
-		GcloudInstalled: true, ProxyInstalled: true, HasADC: true,
+		GcloudInstalled: true, ProxyInstalled: true, HasADC: true, ADCValid: true,
 		HasAccount: true, ActiveAccount: "me@velora.se",
 	})
 }

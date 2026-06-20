@@ -5,6 +5,7 @@ package gcloud
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -86,6 +87,25 @@ func ADCExists() (bool, error) {
 	default:
 		return false, err
 	}
+}
+
+// ADCValid reports whether Application Default Credentials can currently mint an
+// access token. ADCExists only proves the credential file is on disk; the
+// refresh token it holds expires and is subject to Google's periodic
+// reauthentication, which the proxy surfaces at connect time as
+// "invalid_grant"/"invalid_rapt". Asking gcloud to print a token forces the
+// same refresh the proxy will do, so it is the only reliable probe. A non-zero
+// exit means the token can't be minted (expired or reauth required) — that is
+// the answer, not an error to propagate.
+func ADCValid() (bool, error) {
+	if _, err := run.Output("gcloud", "auth", "application-default", "print-access-token"); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // ListProjects returns the projects the active account can enumerate.
