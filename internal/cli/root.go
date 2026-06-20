@@ -1,7 +1,12 @@
 // Package cli wires the cobra command tree.
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"errors"
+
+	"github.com/gpnaslund/gcp-tui/internal/run"
+	"github.com/spf13/cobra"
+)
 
 // Execute runs the root command.
 func Execute() error {
@@ -14,6 +19,9 @@ func Execute() error {
 			"transparency.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRun: func(_ *cobra.Command, _ []string) {
+			run.DryRun = flagDryRun
+		},
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runTUI()
 		},
@@ -22,5 +30,9 @@ func Execute() error {
 	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "print the gcloud commands that would run, run nothing")
 	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "assume yes for non-prod write confirmations")
 	root.AddCommand(initCmd(), doctorCmd(), upCmd(), downCmd(), listCmd(), profileCmd(), connCmd(), secretsCmd())
-	return root.Execute()
+	err := root.Execute()
+	if errors.Is(err, run.ErrDryRun) {
+		return nil
+	}
+	return err
 }
