@@ -35,8 +35,8 @@ func upCmd() *cobra.Command {
 			if _, err := exec.LookPath("cloud-sql-proxy"); err != nil {
 				return fmt.Errorf("cloud-sql-proxy not found on PATH; install it first")
 			}
-			if env.Confirm && !typedConfirm(env.Name) {
-				return fmt.Errorf("aborted: confirmation did not match %q", env.Name)
+			if err := authorizeWrite(*env); err != nil {
+				return err
 			}
 			offerConnString(env)
 			return proxy.Start(*env)

@@ -1,9 +1,26 @@
 package proxy
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/gpnaslund/gcp-tui/internal/config"
+	"github.com/gpnaslund/gcp-tui/internal/run"
 )
+
+// TestStartDryRun locks in the safety guard: under --dry-run, Start must return
+// ErrDryRun without launching the proxy. The guard returns before SlotBusy and
+// cmd.Start, so this never touches the network or spawns cloud-sql-proxy.
+func TestStartDryRun(t *testing.T) {
+	run.DryRun = true
+	t.Cleanup(func() { run.DryRun = false })
+
+	e := config.Env{Name: "test", Address: "127.0.0.99", Port: 1, Instance: "p:r:i"}
+	if err := Start(e); !errors.Is(err, run.ErrDryRun) {
+		t.Fatalf("Start under dry-run = %v; want ErrDryRun", err)
+	}
+}
 
 func TestParsePIDs(t *testing.T) {
 	tests := []struct {

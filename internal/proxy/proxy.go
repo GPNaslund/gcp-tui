@@ -101,6 +101,10 @@ func Command(e config.Env) *exec.Cmd {
 // output under a banner, and blocks until interrupted (Ctrl-C), which tears the
 // tunnel down cleanly.
 func Start(e config.Env) error {
+	if run.DryRun {
+		fmt.Println(strings.Join(Command(e).Args, " "))
+		return run.ErrDryRun
+	}
 	if SlotBusy(e) {
 		return fmt.Errorf("refusing to start: %s:%d already has a listener (stale proxy or another process); free it first", e.Address, e.Port)
 	}

@@ -59,11 +59,9 @@ func runSet(envName, name string) error {
 	}
 
 	// PROD GATE: must run before any Create or AddVersion.
-	if env.Confirm {
-		fmt.Printf("About to set secret %q in project %s.\n", name, env.Project)
-		if !typedConfirm(env.Name) {
-			return fmt.Errorf("aborted: confirmation did not match %q", env.Name)
-		}
+	fmt.Printf("About to set secret %q in project %s.\n", name, env.Project)
+	if err := authorizeWrite(*env); err != nil {
+		return err
 	}
 
 	if !exists {
