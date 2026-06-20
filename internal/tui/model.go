@@ -163,6 +163,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.killAllTunnels()
 			return m, tea.Quit
+		case "x":
+			// Stop the tunnel whose log panel is currently open; keep the
+			// panel open so the shutdown lines stream in and the env flips
+			// to idle via tunnelExitedMsg. For read panels (panelTunnelEnv
+			// is "") fall through to viewport scrolling.
+			if m.panelTunnelEnv != "" {
+				return m, m.stopTunnel(m.panelTunnelEnv)
+			}
+			var cmd tea.Cmd
+			m.panel.vp, cmd = m.panel.vp.Update(msg)
+			return m, cmd
 		default:
 			var cmd tea.Cmd
 			m.panel.vp, cmd = m.panel.vp.Update(msg)
@@ -302,17 +313,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "x":
 		if e := m.selectedEnv(); e != nil && m.live[e.Name] {
-			if t := m.tunnels[e.Name]; t != nil && t.cmd != nil && t.cmd.Process != nil {
-				// Tracked: SIGTERM it; its waitTunnel fires tunnelExitedMsg,
-				// which removes it from tracking, closes its reader, and
-				// refreshes live state.
-				_ = t.cmd.Process.Signal(syscall.SIGTERM)
-				m.toast = "stopping tunnel: " + e.Name
-				return m, nil
-			}
-			// Live but untracked (a proxy this cockpit did not start): hand off
-			// to `down`, which locates and kills the listener on the slot.
-			return m, execSelf("down", e.Name)
+			return m, m.stopTunnel(e.Name)
 		}
 	case "d":
 		m.doc, _ = doctor.Inspect()
@@ -320,6 +321,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toast = "refreshed"
 	}
 	return m, nil
+}
+
+// stopTunnel SIGTERMs a tracked background tunnel by name. For tracked tunnels
+// (ones this cockpit started) it signals the process directly and sets a toast;
+// waitTunnel will fire tunnelExitedMsg when the process exits, which drops it
+// from tracking. For live-but-untracked tunnels (a proxy this cockpit did not
+// start) it hands off to `down`, which locates and kills the listener on the
+// slot.
+func (m *Model) stopTunnel(name string) tea.Cmd {
+	if t := m.tunnels[name]; t != nil && t.cmd != nil && t.cmd.Process != nil {
+		_ = t.cmd.Process.Signal(syscall.SIGTERM)
+		m.toast = "stopping tunnel: " + name
+		return nil
+	}
+	// Live but untracked: hand off to `down`.
+	return execSelf("down", name)
 }
 
 func (m *Model) copyConn(e *config.Env, p *config.Profile) {
@@ -343,6 +360,29 @@ func (m *Model) copyConn(e *config.Env, p *config.Profile) {
 	m.toast = "copied " + e.Name + "/" + p.Name + " connection string"
 }
 
+// connLines builds the connection-string header lines to seed the tunnel panel
+// with on start (cockpit parity with `up`'s offerConnString). For each profile it
+// emits one "connect (<profile>): <ConnString>" line; for non-IAM envs the
+// password comes from the OS keyring via secret.Get. When the keyring lookup
+// fails (no stored password yet) it emits "connect (<profile>): no stored
+// password" instead so the panel is still useful.
+func (m Model) connLines(e config.Env) []string {
+	lines := make([]string, 0, len(e.Profiles))
+	for _, p := range e.Profiles {
+		if e.IAMAuth {
+			lines = append(lines, "connect ("+p.Name+"): "+e.ConnString(p, ""))
+			continue
+		}
+		pw, err := secret.Get(e.Name, p.Name)
+		if err != nil {
+			lines = append(lines, "connect ("+p.Name+"): no stored password")
+			continue
+		}
+		lines = append(lines, "connect ("+p.Name+"): "+e.ConnString(p, pw))
+	}
+	return lines
+}
+
 // startBackgroundTunnel launches a tracked background proxy for the env and keeps
 // the cockpit interactive, so several tunnels can be live at once. For confirm=true
 // envs it is only reached after focusConfirm (the interactive prod gate) has
@@ -364,6 +404,11 @@ func (m Model) startBackgroundTunnel(e config.Env) (tea.Model, tea.Cmd) {
 		m.tunnels = make(map[string]*tunnel)
 	}
 	t := &tunnel{cmd: cmd, reader: reader, buf: bufio.NewReader(reader)}
+	// Seed the line buffer with connection strings before any proxy output
+	// arrives, so the panel shows them immediately (and they persist on reopen).
+	if len(e.Profiles) > 0 {
+		t.lines = m.connLines(e)
+	}
 	m.tunnels[e.Name] = t
 	m.refreshLive()
 	m.openTunnelPanel(e.Name)
@@ -665,6 +710,8 @@ func (m Model) renderInspector(width int) string {
 func (m Model) renderFooter(width int) string {
 	var help string
 	switch {
+	case m.panel.open && m.panelTunnelEnv != "":
+		help = "↑↓ scroll · x stop tunnel · esc close · ctrl+c quit"
 	case m.panel.open:
 		help = "↑↓ scroll · esc/q close · ctrl+c quit"
 	case m.focus == focusProfiles:
@@ -673,7 +720,7 @@ func (m Model) renderFooter(width int) string {
 		help = "type the env name · ⏎ confirm · esc cancel"
 	default:
 		help = "↑↓ move · ⏎ tunnel · L logs · D dbs · U users · I info · B backups\n" +
-			lipgloss.NewStyle().Foreground(muted).Render("x down · c copy · p profile · i discover · s pull · d doctor · q quit")
+			lipgloss.NewStyle().Foreground(muted).Render("x stop · c copy · p profile · i discover · s pull · d doctor · q quit")
 	}
 	toast := " "
 	if m.toast != "" {

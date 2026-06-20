@@ -285,6 +285,108 @@ func TestTunnelLogMsgReissuesUntilEOF(t *testing.T) {
 	}
 }
 
+// TestConnLinesSeedsConnectLines proves connLines returns one "connect (<profile>):"
+// line per profile. For non-IAM envs without a keyring entry it falls back to
+// "no stored password" so the panel is still useful in an environment without a
+// configured keyring (CI, fresh installs, etc.).
+func TestConnLinesSeedsConnectLines(t *testing.T) {
+	m := sized(testModel())
+	// staging: non-IAM, profile "app" — keyring will return an error in test.
+	e := m.cfg.Envs[0]
+	lines := m.connLines(e)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 conn line, got %d", len(lines))
+	}
+	if !strings.HasPrefix(lines[0], "connect (app):") {
+		t.Fatalf("expected line starting with 'connect (app):', got %q", lines[0])
+	}
+}
+
+// TestConnLinesSeedsBufferAboveLog proves that when a tunnel struct is seeded
+// with connLines before openTunnelPanel, the connection-string lines appear in
+// the panel above any streamed proxy output and persist when the panel is
+// reopened. This mirrors the startBackgroundTunnel seeding step without
+// launching a real proxy.
+func TestConnLinesSeedsBufferAboveLog(t *testing.T) {
+	m := sized(testModel())
+	e := m.cfg.Envs[0] // staging, profile "app"
+
+	// Seed the tunnel exactly as startBackgroundTunnel does.
+	t2 := &tunnel{buf: bufio.NewReader(strings.NewReader(""))}
+	t2.lines = m.connLines(e)
+	m.tunnels = map[string]*tunnel{"staging": t2}
+
+	// Simulate a proxy log line arriving after the seed.
+	out, _ := m.Update(tunnelLogMsg{env: "staging", line: "Listening on 127.0.0.2:15433"})
+	m = out.(Model)
+
+	// Open the panel (as startBackgroundTunnel does after seeding).
+	m.openTunnelPanel("staging")
+
+	view := m.View()
+	if !strings.Contains(view, "connect (app):") {
+		t.Fatal("panel must show the seeded connect line")
+	}
+	if !strings.Contains(view, "Listening on 127.0.0.2:15433") {
+		t.Fatal("panel must also show the streamed proxy log line")
+	}
+
+	// Confirm the connect line is before the proxy log line (seeded above streamed output).
+	connIdx := strings.Index(view, "connect (app):")
+	logIdx := strings.Index(view, "Listening on 127.0.0.2:15433")
+	if connIdx > logIdx {
+		t.Fatal("connect line must appear above the streamed proxy log line")
+	}
+}
+
+// TestStopTunnelFromPanel proves that pressing x while the tunnel-log panel is
+// open SIGTERMs the tracked tunnel (not quitting the cockpit) and keeps the
+// panel open so shutdown lines can stream in.
+func TestStopTunnelFromPanel(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("could not start stand-in process: %v", err)
+	}
+
+	m := sized(testModel())
+	m.tunnels = map[string]*tunnel{
+		"staging": {cmd: cmd, buf: bufio.NewReader(strings.NewReader(""))},
+	}
+	m.live["staging"] = true
+	m.openTunnelPanel("staging") // sets panelTunnelEnv = "staging"
+
+	if !m.panel.open || m.panelTunnelEnv != "staging" {
+		t.Fatal("precondition: panel must be open on the staging tunnel")
+	}
+
+	// Press x while the tunnel panel is open.
+	out, returnCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = out.(Model)
+
+	// Panel stays open (shutdown lines should still stream in).
+	if !m.panel.open {
+		t.Fatal("panel must stay open after x so shutdown lines can stream in")
+	}
+	// stopTunnel for a tracked process returns nil (toast set, SIGTERM sent
+	// synchronously); waitTunnel fires tunnelExitedMsg when the process exits.
+	if returnCmd != nil {
+		t.Fatalf("x on a tracked tunnel must return nil cmd, got %T", returnCmd)
+	}
+
+	// The SIGTERM must actually be delivered to the child.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("process exited cleanly; x did not signal it")
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("process still running 5s after x — no SIGTERM delivered")
+	}
+}
+
 // TestKillAllTunnelsSIGTERMsTrackedProcess is the die-on-quit safety check: a
 // real short-lived child must actually receive SIGTERM from killAllTunnels.
 func TestKillAllTunnelsSIGTERMsTrackedProcess(t *testing.T) {
