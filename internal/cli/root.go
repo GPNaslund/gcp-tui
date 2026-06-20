@@ -18,6 +18,9 @@ func Execute() error {
 			return runTUI()
 		},
 	}
+	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "machine-readable JSON output")
+	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "print the gcloud commands that would run, run nothing")
+	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "assume yes for non-prod write confirmations")
 	root.AddCommand(initCmd(), doctorCmd(), upCmd(), downCmd(), listCmd(), profileCmd(), connCmd(), secretsCmd())
 	return root.Execute()
 }
