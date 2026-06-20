@@ -29,7 +29,7 @@ func Execute() error {
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "machine-readable JSON output")
 	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "print the gcloud commands that would run, run nothing")
 	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "assume yes for non-prod write confirmations")
-	root.AddCommand(initCmd(), doctorCmd(), upCmd(), downCmd(), listCmd(), profileCmd(), connCmd(), secretsCmd(), statusCmd())
+	root.AddCommand(initCmd(), doctorCmd(), upCmd(), downCmd(), listCmd(), profileCmd(), connCmd(), secretsCmd(), statusCmd(), logsCmd())
 	err := root.Execute()
 	if errors.Is(err, run.ErrDryRun) {
 		return nil
