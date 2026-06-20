@@ -1,7 +1,9 @@
 // Package tui is the interactive cockpit: a master-detail view over the same
 // core (config, doctor, proxy, secret) the CLI uses. It owns the screen; tunnels
-// run via tea.ExecProcess, which releases the terminal to the proxy and resumes
-// the cockpit when it exits.
+// run as tracked background proxies (proxy.StartBackground) so several can be
+// live at once while the cockpit stays interactive. They are session-scoped:
+// every tracked tunnel is SIGTERMed on quit (die-on-quit), so a normal exit
+// never leaks a proxy.
 package tui
 
 import (
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,6 +40,10 @@ type Model struct {
 	doc  doctor.Result
 	live map[string]bool // env name -> slot currently has a listener
 
+	// tunnels tracks background proxies this cockpit started, keyed by env name.
+	// They are session-scoped: killAllTunnels SIGTERMs every entry on quit.
+	tunnels map[string]*exec.Cmd
+
 	w, h    int
 	envIdx  int
 	profIdx int
@@ -48,7 +55,10 @@ type Model struct {
 	panel panel
 }
 
-type tunnelClosedMsg struct{ err error }
+type tunnelExitedMsg struct {
+	env string
+	err error
+}
 type reloadMsg struct{}
 
 // New builds a cockpit over already-loaded config and doctor state.
@@ -78,12 +88,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.panel.vp.GotoTop()
 		}
 		return m, nil
-	case tunnelClosedMsg:
+	case tunnelExitedMsg:
+		delete(m.tunnels, msg.env)
 		m.refreshLive()
 		if msg.err != nil {
-			m.toast = "tunnel exited: " + msg.err.Error()
+			m.toast = "tunnel exited: " + msg.env + " (" + msg.err.Error() + ")"
 		} else {
-			m.toast = "tunnel closed"
+			m.toast = "tunnel exited: " + msg.env
 		}
 		return m, nil
 	case reloadMsg:
@@ -109,6 +120,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			m.panel.open = false
 		case "ctrl+c":
+			m.killAllTunnels()
 			return m, tea.Quit
 		default:
 			var cmd tea.Cmd
@@ -119,8 +131,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// focusConfirm is the interactive prod gate: the TUI equivalent of authorizeWrite.
-	// The user must type the env name before startTunnel is called. No tunnel runs
-	// for confirm=true envs until this check passes.
+	// The user must type the env name before startBackgroundTunnel is called. No
+	// tunnel runs for confirm=true envs until this check passes.
 	if m.focus == focusConfirm {
 		switch key {
 		case "esc":
@@ -129,7 +141,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			e := m.selectedEnv()
 			if e != nil && m.confirmInput == e.Name {
 				m.focus, m.confirmInput = focusEnv, ""
-				return m, startTunnel(*e)
+				return m.startBackgroundTunnel(*e)
 			}
 			m.toast, m.confirmInput = "confirmation did not match", ""
 		case "backspace":
@@ -146,6 +158,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q", "ctrl+c":
+		m.killAllTunnels()
 		return m, tea.Quit
 	case "up", "k":
 		if m.focus == focusProfiles {
@@ -179,7 +192,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus, m.confirmInput = focusConfirm, ""
 			return m, nil
 		}
-		return m, startTunnel(*e)
+		return m.startBackgroundTunnel(*e)
 	case "c":
 		e := m.selectedEnv()
 		if e == nil {
@@ -238,6 +251,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "x":
 		if e := m.selectedEnv(); e != nil && m.live[e.Name] {
+			if cmd := m.tunnels[e.Name]; cmd != nil {
+				// Tracked: SIGTERM it; its waitTunnel fires tunnelExitedMsg,
+				// which removes it from tracking and refreshes live state.
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+				m.toast = "stopping tunnel: " + e.Name
+				return m, nil
+			}
+			// Live but untracked (a proxy this cockpit did not start): hand off
+			// to `down`, which locates and kills the listener on the slot.
 			return m, execSelf("down", e.Name)
 		}
 	case "d":
@@ -269,15 +291,82 @@ func (m *Model) copyConn(e *config.Env, p *config.Profile) {
 	m.toast = "copied " + e.Name + "/" + p.Name + " connection string"
 }
 
-// startTunnel runs the proxy via ExecProcess, releasing the terminal to it and
-// resuming the cockpit when it exits. For confirm=true envs, startTunnel is only
-// reached after focusConfirm (the interactive prod gate) has validated the typed
-// env name — it is never called directly on Enter for those envs.
-func startTunnel(e config.Env) tea.Cmd {
-	if proxy.SlotBusy(e) {
-		return func() tea.Msg { return tunnelClosedMsg{fmt.Errorf("%s:%d already in use", e.Address, e.Port)} }
+// startBackgroundTunnel launches a tracked background proxy for the env and keeps
+// the cockpit interactive, so several tunnels can be live at once. For confirm=true
+// envs it is only reached after focusConfirm (the interactive prod gate) has
+// validated the typed env name — it is never called directly on Enter for those
+// envs. The returned tea.Cmd waits on the proxy and emits tunnelExitedMsg when it
+// dies, which removes it from tracking.
+func (m Model) startBackgroundTunnel(e config.Env) (tea.Model, tea.Cmd) {
+	if m.tunnels[e.Name] != nil {
+		m.toast = "tunnel already live: " + e.Name
+		return m, nil
 	}
-	return tea.ExecProcess(proxy.Command(e), func(err error) tea.Msg { return tunnelClosedMsg{err} })
+	cmd, err := proxy.StartBackground(e)
+	if err != nil {
+		m.toast = "tunnel failed: " + err.Error()
+		return m, nil
+	}
+	if m.tunnels == nil {
+		m.tunnels = make(map[string]*exec.Cmd)
+	}
+	m.tunnels[e.Name] = cmd
+	m.refreshLive()
+	if path, perr := proxy.LogFilePath(e); perr == nil {
+		m.toast = "tunnel up: " + e.Name + " (log: " + path + ")"
+	} else {
+		m.toast = "tunnel up: " + e.Name
+	}
+	return m, waitTunnel(e.Name, cmd)
+}
+
+// waitTunnel blocks on the proxy's exit and reports it back to the cockpit as a
+// tunnelExitedMsg, so a tunnel dying on its own (or via SIGTERM from x/quit) is
+// reflected in tracking and live state.
+func waitTunnel(env string, cmd *exec.Cmd) tea.Cmd {
+	return func() tea.Msg { return tunnelExitedMsg{env: env, err: cmd.Wait()} }
+}
+
+// killAllTunnels SIGTERMs every tracked background tunnel. The cockpit runs the
+// terminal in raw mode, so child proxies receive no signal on a normal quit; this
+// makes the tunnels session-scoped — a clean exit never leaks a proxy.
+//
+// It is idempotent: signalling an already-dead process returns an error, which is
+// discarded, so calling it twice (e.g. from both the keystroke path and the quit
+// filter) is safe.
+func (m *Model) killAllTunnels() {
+	for _, cmd := range m.tunnels {
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		}
+	}
+}
+
+// QuitCleanupFilter is a tea.WithFilter hook that kills every tracked tunnel on
+// any quit, including the ones the keystroke paths never see. Bubble Tea installs
+// its own SIGINT/SIGTERM handler that injects InterruptMsg/QuitMsg and exits
+// WITHOUT routing through Update/handleKey, so `kill <pid>` (SIGTERM) or an OS
+// SIGINT would otherwise leak the tracked proxy (prod included). The filter runs
+// on every message before Bubble Tea's QuitMsg/InterruptMsg short-circuit, so it
+// catches both the keystroke quits and the signal-driven ones. The tunnels map is
+// a reference type, so the value-copy model still signals the live processes.
+//
+// It returns the message unchanged. killAllTunnels is idempotent, so the
+// belt-and-suspenders killAllTunnels calls in handleKey's q/ctrl+c paths remain
+// safe alongside this filter.
+//
+// SIGKILL and SIGHUP (terminal close) can still orphan a tunnel — Bubble Tea
+// cannot intercept those. That is acceptable: an orphan shows as ● live on the
+// next launch and is cleanable via x or `gcp-tui down`. We deliberately do not
+// use Pdeathsig (Go delivers it per-thread, which makes it fragile).
+func QuitCleanupFilter(model tea.Model, msg tea.Msg) tea.Msg {
+	switch msg.(type) {
+	case tea.QuitMsg, tea.InterruptMsg:
+		if m, ok := model.(Model); ok {
+			m.killAllTunnels()
+		}
+	}
+	return msg
 }
 
 // execSelf runs one of this binary's own subcommands (e.g. profile add, init) in

@@ -2,8 +2,10 @@ package tui
 
 import (
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -168,5 +170,86 @@ func TestOpenPanelDoesNotMoveEnvSelection(t *testing.T) {
 	}
 	if !out.(Model).panel.open {
 		t.Fatal("scroll keys must not close the panel")
+	}
+}
+
+// TestTunnelExitedMsgRemovesTracking proves the cockpit's bookkeeping: when a
+// tracked tunnel exits, the env is dropped from m.tunnels, live flips back to
+// idle, and the toast names the env (and the error on failure).
+func TestTunnelExitedMsgRemovesTracking(t *testing.T) {
+	m := sized(testModel())
+	m.tunnels = map[string]*exec.Cmd{"staging": {}}
+	m.live["staging"] = true
+
+	out, _ := m.Update(tunnelExitedMsg{env: "staging", err: errors.New("boom")})
+	m = out.(Model)
+
+	if _, ok := m.tunnels["staging"]; ok {
+		t.Fatal("tunnelExitedMsg must remove the env from tunnels")
+	}
+	if m.live["staging"] {
+		t.Fatal("tunnelExitedMsg must flip live back to idle")
+	}
+	if !strings.Contains(m.toast, "staging") || !strings.Contains(m.toast, "boom") {
+		t.Fatalf("toast must surface the env and the error, got %q", m.toast)
+	}
+}
+
+// TestKillAllTunnelsSIGTERMsTrackedProcess is the die-on-quit safety check: a
+// real short-lived child must actually receive SIGTERM from killAllTunnels.
+func TestKillAllTunnelsSIGTERMsTrackedProcess(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("could not start stand-in process: %v", err)
+	}
+
+	m := sized(testModel())
+	m.tunnels = map[string]*exec.Cmd{"staging": cmd}
+	m.killAllTunnels()
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		// SIGTERM makes Wait return a non-nil exit error; a nil error would
+		// mean the process exited on its own, not from our signal.
+		if err == nil {
+			t.Fatal("process exited cleanly; killAllTunnels did not signal it")
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("process still running 5s after killAllTunnels — no SIGTERM delivered")
+	}
+}
+
+// TestQuitCleanupFilterSIGTERMsTrackedProcess proves the signal-driven quit path:
+// Bubble Tea's own SIGINT/SIGTERM handling injects a QuitMsg that exits without
+// touching Update/handleKey, so the WithFilter hook is the only thing that cleans
+// up a tracked tunnel on `kill <pid>`. A real short-lived child tracked in the
+// model must actually receive SIGTERM when the filter sees a tea.QuitMsg.
+func TestQuitCleanupFilterSIGTERMsTrackedProcess(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("could not start stand-in process: %v", err)
+	}
+
+	m := sized(testModel())
+	m.tunnels = map[string]*exec.Cmd{"staging": cmd}
+
+	got := QuitCleanupFilter(m, tea.QuitMsg{})
+	if _, ok := got.(tea.QuitMsg); !ok {
+		t.Fatalf("filter must return the message unchanged, got %T", got)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("process exited cleanly; QuitCleanupFilter did not signal it")
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("process still running 5s after QuitCleanupFilter — no SIGTERM delivered")
 	}
 }

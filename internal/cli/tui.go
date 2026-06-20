@@ -15,6 +15,9 @@ func runTUI() error {
 		return err
 	}
 	doc, _ := doctor.Inspect()
-	_, err = tea.NewProgram(tui.New(cfg, doc), tea.WithAltScreen()).Run()
+	// WithFilter installs QuitCleanupFilter, which SIGTERMs every tracked tunnel on
+	// any quit — including Bubble Tea's own SIGINT/SIGTERM handling, which exits
+	// without routing through Update/handleKey.
+	_, err = tea.NewProgram(tui.New(cfg, doc), tea.WithAltScreen(), tea.WithFilter(tui.QuitCleanupFilter)).Run()
 	return err
 }

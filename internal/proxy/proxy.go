@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -130,4 +131,53 @@ func Start(e config.Env) error {
 	case err := <-done:
 		return err
 	}
+}
+
+// LogFilePath returns the per-env log file path under the user cache dir
+// (UserCacheDir/gcp-tui/<env>.log), creating the directory with owner-only
+// permissions. Background tunnels stream their output here since, unlike the
+// foreground Start, they have no terminal to write to.
+func LogFilePath(e config.Env) (string, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(cache, "gcp-tui")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, e.Name+".log"), nil
+}
+
+// StartBackground launches cloud-sql-proxy bound to the env's reserved slot as a
+// non-blocking child process, streaming its output to a per-env log file. Unlike
+// Start it does not Wait — the caller owns the returned cmd's lifetime (it must
+// Wait on it elsewhere and SIGTERM it on shutdown). Multiple background tunnels
+// can run at once.
+func StartBackground(e config.Env) (*exec.Cmd, error) {
+	if SlotBusy(e) {
+		return nil, fmt.Errorf("refusing to start: %s:%d already has a listener (stale proxy or another process); free it first", e.Address, e.Port)
+	}
+
+	path, err := LogFilePath(e)
+	if err != nil {
+		return nil, err
+	}
+	logFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := Command(e)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	// Record the exact command into the log file (not stderr): the cockpit runs in
+	// the alt-screen, so echoing "$ cloud-sql-proxy ..." to stderr would corrupt the
+	// rendered TUI. The log keeps the same transparency without touching the screen.
+	fmt.Fprintln(logFile, "$ "+strings.Join(cmd.Args, " "))
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		return nil, err
+	}
+	return cmd, nil
 }
