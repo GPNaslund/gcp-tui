@@ -46,6 +46,26 @@ func TestConnStringIAMNoPassword(t *testing.T) {
 	}
 }
 
+func TestInstanceNameAndDatabaseID(t *testing.T) {
+	e := Env{Project: "fluted-anthem-413815", Instance: "fluted-anthem-413815:europe-north2:velora-staging"}
+	if got := e.InstanceName(); got != "velora-staging" {
+		t.Fatalf("InstanceName: got %q want %q", got, "velora-staging")
+	}
+	if got := e.DatabaseID(); got != "fluted-anthem-413815:velora-staging" {
+		t.Fatalf("DatabaseID: got %q want %q", got, "fluted-anthem-413815:velora-staging")
+	}
+}
+
+func TestInstanceNameColonless(t *testing.T) {
+	e := Env{Project: "p", Instance: "velora-staging"}
+	if got := e.InstanceName(); got != "velora-staging" {
+		t.Fatalf("InstanceName colonless: got %q want %q", got, "velora-staging")
+	}
+	if got := e.DatabaseID(); got != "p:velora-staging" {
+		t.Fatalf("DatabaseID colonless: got %q want %q", got, "p:velora-staging")
+	}
+}
+
 func TestNextSlotSkipsUsed(t *testing.T) {
 	c := &Config{Envs: []Env{
 		{Name: "staging", Address: "127.0.0.2", Port: 15433},

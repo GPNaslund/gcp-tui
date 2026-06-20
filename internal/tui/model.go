@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -43,6 +44,8 @@ type Model struct {
 
 	confirmInput string
 	toast        string
+
+	panel panel
 }
 
 type tunnelClosedMsg struct{ err error }
@@ -61,6 +64,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+		w, h := m.panelViewportSize()
+		m.panel.vp.Width, m.panel.vp.Height = w, h
+		return m, nil
+	case panelDataMsg:
+		m.panel.loading = false
+		m.panel.err = msg.err
+		if msg.title != "" {
+			m.panel.title = msg.title
+		}
+		if msg.err == nil {
+			m.panel.vp.SetContent(msg.content)
+			m.panel.vp.GotoTop()
+		}
 		return m, nil
 	case tunnelClosedMsg:
 		m.refreshLive()
@@ -87,6 +103,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.toast = ""
 	key := msg.String()
+
+	if m.panel.open {
+		switch key {
+		case "esc":
+			m.panel.open = false
+		case "ctrl+c":
+			return m, tea.Quit
+		default:
+			var cmd tea.Cmd
+			m.panel.vp, cmd = m.panel.vp.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	}
 
 	if m.focus == focusConfirm {
 		switch key {
@@ -162,6 +192,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		if e := m.selectedEnv(); e != nil {
 			return m, execSelf("secrets", "pull", e.Name)
+		}
+	case "L":
+		if e := m.selectedEnv(); e != nil {
+			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panel.title = "logs: " + e.Name
+			w, h := m.panelViewportSize()
+			m.panel.vp = viewport.New(w, h)
+			return m, fetchLogsCmd(*e)
 		}
 	case "x":
 		if e := m.selectedEnv(); e != nil && m.live[e.Name] {
@@ -251,17 +289,31 @@ func (m Model) selectedProfile() *config.Profile {
 
 // ── view ─────────────────────────────────────────────────────────────────
 
-func (m Model) View() string {
-	if m.w < 64 || m.h < 16 {
-		return "gcp-tui — enlarge the terminal (min 64×16)"
-	}
-	leftTotal := 34
+// paneLayout returns the cockpit's body geometry: the total widths of the left
+// and right panes and the shared body height. Sizing the panel viewport and
+// View() draw from this one source so they stay in lockstep.
+func (m Model) paneLayout() (leftTotal, rightTotal, bodyH int) {
+	leftTotal = 34
 	if m.w < 96 {
 		leftTotal = m.w / 3
 	}
 	leftTotal = clamp(leftTotal, 22, m.w-24)
-	rightTotal := m.w - leftTotal
-	bodyH := m.h - 4
+	return leftTotal, m.w - leftTotal, m.h - 4
+}
+
+// panelViewportSize is the inner content size for the panel's viewport: the
+// right pane minus its border+padding (4 cols, 2 rows) and minus the panel's
+// own title+rule (2 rows).
+func (m Model) panelViewportSize() (w, h int) {
+	_, rightTotal, bodyH := m.paneLayout()
+	return clamp(rightTotal-4, 1, rightTotal), clamp(bodyH-4, 1, bodyH)
+}
+
+func (m Model) View() string {
+	if m.w < 64 || m.h < 16 {
+		return "gcp-tui — enlarge the terminal (min 64×16)"
+	}
+	leftTotal, rightTotal, bodyH := m.paneLayout()
 
 	leftBorder, rightBorder := line, line
 	if m.focus == focusEnv {
@@ -270,8 +322,14 @@ func (m Model) View() string {
 		rightBorder = m.focusColor()
 	}
 
+	rightBody := m.renderInspector(rightTotal - 4)
+	if m.panel.open {
+		rightBorder = m.focusColor()
+		rightBody = m.panel.renderPanel(rightTotal - 4)
+	}
+
 	left := pane(m.renderEnvList(leftTotal-4), leftTotal, bodyH, leftBorder)
-	right := pane(m.renderInspector(rightTotal-4), rightTotal, bodyH, rightBorder)
+	right := pane(rightBody, rightTotal, bodyH, rightBorder)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 
 	return lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(m.w), body, m.renderFooter(m.w))
@@ -370,13 +428,15 @@ func (m Model) renderInspector(width int) string {
 
 func (m Model) renderFooter(width int) string {
 	var help string
-	switch m.focus {
-	case focusProfiles:
+	switch {
+	case m.panel.open:
+		help = "↑↓/jk scroll · esc close · ctrl+c quit"
+	case m.focus == focusProfiles:
 		help = "↑↓ profile · c/⏎ copy conn · ← back · q quit"
-	case focusConfirm:
+	case m.focus == focusConfirm:
 		help = "type the env name · ⏎ confirm · esc cancel"
 	default:
-		help = "↑↓ move · ⏎ tunnel · x down · c copy · p profile · i discover · s pull · d doctor · q quit"
+		help = "↑↓ move · ⏎ tunnel · L logs · x down · c copy · p profile · i discover · s pull · d doctor · q quit"
 	}
 	toast := " "
 	if m.toast != "" {

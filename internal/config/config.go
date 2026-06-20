@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -152,6 +153,23 @@ func (e *Env) RemoveProfile(name string) bool {
 		}
 	}
 	return false
+}
+
+// InstanceName returns the bare Cloud SQL instance name: the segment after the
+// last ':' in the full connection name (project:region:instance). When the
+// value has no ':', the whole string is the instance name.
+func (e Env) InstanceName() string {
+	if i := strings.LastIndex(e.Instance, ":"); i >= 0 {
+		return e.Instance[i+1:]
+	}
+	return e.Instance
+}
+
+// DatabaseID is the Cloud Logging resource.labels.database_id for this env:
+// "project:instance". It pairs Project with the bare instance name, matching the
+// identifier Cloud Logging records against Cloud SQL log entries.
+func (e Env) DatabaseID() string {
+	return e.Project + ":" + e.InstanceName()
 }
 
 // ConnString builds a Postgres URL for a profile against this environment's
