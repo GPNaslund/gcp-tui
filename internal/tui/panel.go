@@ -66,6 +66,144 @@ func renderLogEntries(entries []gcloud.LogEntry) string {
 	return strings.Join(rows, "\n")
 }
 
+// fetchDatabasesCmd lists Cloud SQL databases for an env off the Update loop,
+// returning a panelDataMsg the model applies to the panel.
+func fetchDatabasesCmd(e config.Env) tea.Cmd {
+	return func() tea.Msg {
+		dbs, err := gcloud.ListDatabases(e.Project, e.InstanceName())
+		if err != nil {
+			return panelDataMsg{title: "databases: " + e.Name, err: err}
+		}
+		return panelDataMsg{title: "databases: " + e.Name, content: renderDatabases(dbs)}
+	}
+}
+
+// fetchUsersCmd lists Cloud SQL users for an env off the Update loop,
+// returning a panelDataMsg the model applies to the panel.
+func fetchUsersCmd(e config.Env) tea.Cmd {
+	return func() tea.Msg {
+		users, err := gcloud.ListUsers(e.Project, e.InstanceName())
+		if err != nil {
+			return panelDataMsg{title: "users: " + e.Name, err: err}
+		}
+		return panelDataMsg{title: "users: " + e.Name, content: renderUsers(users)}
+	}
+}
+
+// fetchDescribeCmd fetches instance detail for an env off the Update loop,
+// returning a panelDataMsg the model applies to the panel.
+func fetchDescribeCmd(e config.Env) tea.Cmd {
+	return func() tea.Msg {
+		detail, err := gcloud.DescribeInstance(e.Project, e.InstanceName())
+		if err != nil {
+			return panelDataMsg{title: "instance: " + e.Name, err: err}
+		}
+		return panelDataMsg{title: "instance: " + e.Name, content: renderInstanceDetail(detail)}
+	}
+}
+
+// fetchBackupsCmd lists Cloud SQL backups for an env off the Update loop,
+// returning a panelDataMsg the model applies to the panel.
+func fetchBackupsCmd(e config.Env) tea.Cmd {
+	return func() tea.Msg {
+		backups, err := gcloud.ListBackups(e.Project, e.InstanceName())
+		if err != nil {
+			return panelDataMsg{title: "backups: " + e.Name, err: err}
+		}
+		return panelDataMsg{title: "backups: " + e.Name, content: renderBackups(backups)}
+	}
+}
+
+// renderDatabases formats database entries one per line as "name charset collation".
+func renderDatabases(dbs []gcloud.Database) string {
+	if len(dbs) == 0 {
+		return lipgloss.NewStyle().Foreground(muted).Render("no databases found")
+	}
+	rows := make([]string, len(dbs))
+	for i, db := range dbs {
+		name := lipgloss.NewStyle().Foreground(cool).Render(fmt.Sprintf("%-30s", db.Name))
+		charset := lipgloss.NewStyle().Foreground(ink).Render(fmt.Sprintf("%-12s", db.Charset))
+		coll := lipgloss.NewStyle().Foreground(muted).Render(db.Collation)
+		rows[i] = name + "  " + charset + "  " + coll
+	}
+	return strings.Join(rows, "\n")
+}
+
+// renderUsers formats SQL user entries one per line as "name host type".
+func renderUsers(users []gcloud.SQLUser) string {
+	if len(users) == 0 {
+		return lipgloss.NewStyle().Foreground(muted).Render("no users found")
+	}
+	rows := make([]string, len(users))
+	for i, u := range users {
+		name := lipgloss.NewStyle().Foreground(cool).Render(fmt.Sprintf("%-30s", u.Name))
+		host := lipgloss.NewStyle().Foreground(ink).Render(fmt.Sprintf("%-20s", u.Host))
+		typ := lipgloss.NewStyle().Foreground(muted).Render(u.Type)
+		rows[i] = name + "  " + host + "  " + typ
+	}
+	return strings.Join(rows, "\n")
+}
+
+// renderInstanceDetail formats a labeled key/value block for an InstanceDetail.
+func renderInstanceDetail(d gcloud.InstanceDetail) string {
+	kv := func(k, v string) string {
+		return "  " + label(k) + "  " + lipgloss.NewStyle().Foreground(ink).Render(v)
+	}
+	backupStr := "disabled"
+	if d.BackupEnabled {
+		backupStr = "enabled"
+	}
+	ipStr := strings.Join(d.IPAddresses, ", ")
+	if ipStr == "" {
+		ipStr = "—"
+	}
+	diskStr := "—"
+	if d.DiskSizeGb != "" {
+		diskStr = d.DiskSizeGb + " GiB"
+	}
+	lines := []string{
+		kv("name", d.Name),
+		kv("version", d.DatabaseVersion),
+		kv("region", d.Region),
+		kv("state", d.State),
+		kv("tier", d.Tier),
+		kv("ha", d.AvailabilityType),
+		kv("disk", diskStr),
+		kv("backup", backupStr),
+		kv("conn", d.ConnectionName),
+		kv("ip", ipStr),
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderBackups formats backup entries one per line as "id time status type".
+func renderBackups(backups []gcloud.Backup) string {
+	if len(backups) == 0 {
+		return lipgloss.NewStyle().Foreground(muted).Render("no backups found")
+	}
+	rows := make([]string, len(backups))
+	for i, b := range backups {
+		id := lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("%-12s", b.ID))
+		ts := lipgloss.NewStyle().Foreground(ink).Render(fmt.Sprintf("%-30s", b.WindowStartTime))
+		status := lipgloss.NewStyle().Foreground(severityColor(statusSeverity(b.Status))).Render(fmt.Sprintf("%-12s", b.Status))
+		typ := lipgloss.NewStyle().Foreground(muted).Render(b.Type)
+		rows[i] = id + "  " + ts + "  " + status + "  " + typ
+	}
+	return strings.Join(rows, "\n")
+}
+
+// statusSeverity maps a backup status to a severity string so we can reuse severityColor.
+func statusSeverity(status string) string {
+	switch status {
+	case "FAILED":
+		return "ERROR"
+	case "RUNNING":
+		return "WARNING"
+	default:
+		return "DEFAULT"
+	}
+}
+
 // severityColor maps a Cloud Logging severity to the cockpit palette.
 func severityColor(severity string) lipgloss.Color {
 	switch severity {

@@ -106,7 +106,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.panel.open {
 		switch key {
-		case "esc":
+		case "esc", "q":
 			m.panel.open = false
 		case "ctrl+c":
 			return m, tea.Quit
@@ -118,6 +118,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// focusConfirm is the interactive prod gate: the TUI equivalent of authorizeWrite.
+	// The user must type the env name before startTunnel is called. No tunnel runs
+	// for confirm=true envs until this check passes.
 	if m.focus == focusConfirm {
 		switch key {
 		case "esc":
@@ -201,6 +204,38 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.panel.vp = viewport.New(w, h)
 			return m, fetchLogsCmd(*e)
 		}
+	case "D":
+		if e := m.selectedEnv(); e != nil {
+			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panel.title = "databases: " + e.Name
+			w, h := m.panelViewportSize()
+			m.panel.vp = viewport.New(w, h)
+			return m, fetchDatabasesCmd(*e)
+		}
+	case "U":
+		if e := m.selectedEnv(); e != nil {
+			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panel.title = "users: " + e.Name
+			w, h := m.panelViewportSize()
+			m.panel.vp = viewport.New(w, h)
+			return m, fetchUsersCmd(*e)
+		}
+	case "I":
+		if e := m.selectedEnv(); e != nil {
+			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panel.title = "instance: " + e.Name
+			w, h := m.panelViewportSize()
+			m.panel.vp = viewport.New(w, h)
+			return m, fetchDescribeCmd(*e)
+		}
+	case "B":
+		if e := m.selectedEnv(); e != nil {
+			m.panel.open, m.panel.loading, m.panel.err = true, true, nil
+			m.panel.title = "backups: " + e.Name
+			w, h := m.panelViewportSize()
+			m.panel.vp = viewport.New(w, h)
+			return m, fetchBackupsCmd(*e)
+		}
 	case "x":
 		if e := m.selectedEnv(); e != nil && m.live[e.Name] {
 			return m, execSelf("down", e.Name)
@@ -235,7 +270,9 @@ func (m *Model) copyConn(e *config.Env, p *config.Profile) {
 }
 
 // startTunnel runs the proxy via ExecProcess, releasing the terminal to it and
-// resuming the cockpit when it exits.
+// resuming the cockpit when it exits. For confirm=true envs, startTunnel is only
+// reached after focusConfirm (the interactive prod gate) has validated the typed
+// env name — it is never called directly on Enter for those envs.
 func startTunnel(e config.Env) tea.Cmd {
 	if proxy.SlotBusy(e) {
 		return func() tea.Msg { return tunnelClosedMsg{fmt.Errorf("%s:%d already in use", e.Address, e.Port)} }
@@ -430,13 +467,14 @@ func (m Model) renderFooter(width int) string {
 	var help string
 	switch {
 	case m.panel.open:
-		help = "↑↓/jk scroll · esc close · ctrl+c quit"
+		help = "↑↓ scroll · esc/q close · ctrl+c quit"
 	case m.focus == focusProfiles:
 		help = "↑↓ profile · c/⏎ copy conn · ← back · q quit"
 	case m.focus == focusConfirm:
 		help = "type the env name · ⏎ confirm · esc cancel"
 	default:
-		help = "↑↓ move · ⏎ tunnel · L logs · x down · c copy · p profile · i discover · s pull · d doctor · q quit"
+		help = "↑↓ move · ⏎ tunnel · L logs · D dbs · U users · I info · B backups\n" +
+			lipgloss.NewStyle().Foreground(muted).Render("x down · c copy · p profile · i discover · s pull · d doctor · q quit")
 	}
 	toast := " "
 	if m.toast != "" {
