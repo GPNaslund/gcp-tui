@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gcp-tui — a safe cockpit for Cloud SQL across environments</title>
-<meta name="description" content="gcp-tui binds every GCP environment to its own reserved loopback slot, so a connection string structurally tells you where it points. A safe, transparent terminal cockpit for the Cloud SQL Auth Proxy.">
+<title>gcp-tui — your whole Cloud SQL workflow in one cockpit</title>
+<meta name="description" content="gcp-tui folds the whole Cloud SQL workflow — connect, logs, databases, backups, secrets — into one terminal cockpit, instead of a stack of gcloud commands. Every environment binds to its own loopback address, so prod can't be mistaken for localhost.">
 <meta name="theme-color" content="#1F1F28">
 <meta property="og:type" content="website">
-<meta property="og:title" content="gcp-tui — prod can never look like localhost">
-<meta property="og:description" content="A safe, transparent terminal cockpit for the Cloud SQL Auth Proxy. Every environment gets its own reserved loopback slot; agents can read but can't touch prod.">
+<meta property="og:title" content="gcp-tui — one cockpit for Cloud SQL across environments">
+<meta property="og:description" content="The whole Cloud SQL workflow in one terminal cockpit instead of a stack of gcloud commands — and every environment binds to its own address, so prod can never look like localhost.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -21,9 +21,9 @@
   <div class="wrap nameplate-inner">
     <a class="brand" href="#top"><span class="brand-lamp"></span>gcp-tui</a>
     <nav class="nav-links">
-      <a href="#display">Display</a>
-      <a href="#map">Address map</a>
-      <a href="#interlock">Interlock</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#safety">Safety</a>
+      <a href="#agents">Agents</a>
       <a href="#install">Install</a>
       <a class="nav-gh" href="https://github.com/gpnaslund/gcp-tui">GitHub ↗</a>
     </nav>
@@ -37,11 +37,12 @@
     <div class="wrap hero-grid">
       <div class="hero-copy">
         <span class="plate-label">Open source · MIT · Go</span>
-        <h1>Prod can never<br>look like <span class="stamp-safe">localhost</span>.</h1>
+        <h1>Your whole Cloud SQL<br>workflow, in one cockpit.</h1>
         <p class="lede">
-          <span class="kw">gcp-tui</span> gives every GCP environment its own reserved loopback address, so the
-          connection string itself tells you which one you're on. It's a transparent terminal
-          cockpit for the <span class="nowrap">Cloud SQL Auth Proxy</span>.
+          Connect to any environment, tail logs, inspect databases, take backups, and pull
+          secrets from <span class="kw">one terminal screen</span> — instead of a stack of
+          <span class="mono">gcloud</span> and <span class="nowrap">cloud-sql-proxy</span> commands.
+          And because every environment binds to its own address, prod can never look like localhost.
         </p>
         <div class="actions">
           <button class="copy" id="copyInstall" data-cmd="go install github.com/gpnaslund/gcp-tui@latest" aria-label="Copy install command">
@@ -115,17 +116,90 @@
             <span class="ck-key">q</span> quit
           </div>
         </div>
-        <figcaption>Frozen on a prod tunnel request. Nothing opens until the name is typed back.</figcaption>
+        <figcaption>One screen for every environment. Frozen here on a prod tunnel request — nothing opens until the name is typed back.</figcaption>
       </figure>
     </div>
   </section>
 
-  <!-- ADDRESS MAP -->
-  <section class="module" id="map">
+  <!-- §1 EASE -->
+  <section class="module" id="workflow">
+    <div class="wrap">
+      <span class="plate-label">The cockpit</span>
+      <h2>One screen, not a stack of commands.</h2>
+      <p class="prose">
+        gcp-tui drives <span class="mono">gcloud</span> and <span class="nowrap">cloud-sql-proxy</span> for you.
+        Opening a tunnel, tailing Cloud Logging, listing databases and users, taking a backup, or pulling
+        secrets is a single keypress in the cockpit instead of a long invocation you keep in a scratchpad.
+        Every command it runs is printed first, so nothing is hidden.
+      </p>
+
+      <div class="swap">
+        <div class="swap-row">
+          <code class="swap-from">cloud-sql-proxy --port 15434 …:prod-db</code>
+          <span class="swap-arrow">→</span>
+          <span class="swap-to"><span class="swap-key">⏎</span> open a tunnel</span>
+        </div>
+        <div class="swap-row">
+          <code class="swap-from">gcloud logging read 'resource.labels.database_id="…"' --limit 50</code>
+          <span class="swap-arrow">→</span>
+          <span class="swap-to"><span class="swap-key">L</span> tail logs</span>
+        </div>
+        <div class="swap-row">
+          <code class="swap-from">gcloud sql databases list --instance prod-db --project …</code>
+          <span class="swap-arrow">→</span>
+          <span class="swap-to"><span class="swap-key">D</span> list databases</span>
+        </div>
+        <div class="swap-row">
+          <code class="swap-from">gcloud sql backups list --instance prod-db --project …</code>
+          <span class="swap-arrow">→</span>
+          <span class="swap-to"><span class="swap-key">B</span> backups</span>
+        </div>
+        <div class="swap-row">
+          <code class="swap-from">gcloud secrets versions access latest --secret … --project …</code>
+          <span class="swap-arrow">→</span>
+          <span class="swap-to"><span class="swap-key">s</span> pull secrets</span>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>Tunnels that clean up</h3>
+            <p>Proxies run as tracked background processes that are killed when you quit. They're session-scoped, so a normal exit never leaves a listener behind.</p>
+          </div>
+        </div>
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>It checks ADC, not just login</h3>
+            <p><span class="mono">doctor</span> validates your gcloud login and your Application Default Credentials, notices when either has expired, and offers to fix it.</p>
+          </div>
+        </div>
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>Secrets stay off your shell</h3>
+            <p>Pull Secret Manager values into a gitignored <span class="mono">.env</span>; set new versions over stdin. Profile passwords live in your OS keyring, never in config.</p>
+          </div>
+        </div>
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>Every command is printed first</h3>
+            <p>Each external <span class="mono">gcloud</span> and proxy command is printed before it runs. Transparency is the point, because these commands can reach production.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- §2 SAFETY -->
+  <section class="module" id="safety">
     <div class="wrap two-col">
       <div class="col-text">
-        <span class="plate-label">Address map</span>
-        <h2>The address<br>is the warning.</h2>
+        <span class="plate-label">Safety</span>
+        <h2>Prod can never<br>look like localhost.</h2>
         <p class="prose">
           Each environment gets its own loopback address and port, so the address itself
           tells you where you are: staging on <span class="mono safe">127.0.0.2</span>,
@@ -134,9 +208,9 @@
           <span class="danger">red</span> for production.
         </p>
         <p class="prose dim">
-          There's no ambient default project and no guessing from your filesystem; the config
-          file you declare is the only source of truth. Before binding, a pre-flight check refuses
-          any slot that already has a listener on it.
+          Starting a tunnel or any write against a <span class="danger">prod</span> environment makes you
+          type its name back first, and no flag skips it. The same typed confirmation guards every
+          mutation: opening a tunnel, taking a backup, setting a secret.
         </p>
       </div>
 
@@ -161,71 +235,22 @@
     </div>
   </section>
 
-  <!-- PANEL FUNCTIONS -->
-  <section class="module band" id="functions">
-    <div class="wrap">
-      <span class="plate-label">Panel functions</span>
-      <h2>Built to keep you on one screen.</h2>
-      <div class="legend">
-        <div class="func">
-          <span class="lamp safe"></span>
-          <div>
-            <h3>An in-terminal cockpit</h3>
-            <p>A two-pane view of environments and their profiles. Start background tunnels, watch their output stream in, and inspect databases, users, or backups without leaving the screen.</p>
-          </div>
-        </div>
-        <div class="func">
-          <span class="lamp safe"></span>
-          <div>
-            <h3>Tunnels that clean up</h3>
-            <p>Proxies run as tracked background processes that are killed when you quit. They're session-scoped, so a normal exit never leaves a listener behind.</p>
-          </div>
-        </div>
-        <div class="func is-key">
-          <span class="lamp amber"></span>
-          <div>
-            <h3>Safe for agents to drive</h3>
-            <p>Read commands can emit <span class="mono">--json</span>, and <span class="mono">--dry-run</span> prints the exact <span class="mono">gcloud</span> call without running it. A prod write is impossible without a human at a terminal.</p>
-          </div>
-        </div>
-        <div class="func">
-          <span class="lamp safe"></span>
-          <div>
-            <h3>Secrets stay off your shell</h3>
-            <p>Pull Secret Manager values into a gitignored <span class="mono">.env</span>; set new versions over stdin. Profile passwords live in your OS keyring, never in config.</p>
-          </div>
-        </div>
-        <div class="func">
-          <span class="lamp safe"></span>
-          <div>
-            <h3>Every command is printed first</h3>
-            <p>Each external <span class="mono">gcloud</span> and proxy command is printed before it runs. Transparency is the point, because these commands can reach production.</p>
-          </div>
-        </div>
-        <div class="func">
-          <span class="lamp safe"></span>
-          <div>
-            <h3>It checks ADC, not just login</h3>
-            <p><span class="mono">doctor</span> validates your gcloud login and your Application Default Credentials, notices when either has expired, and offers to fix it.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- WRITE INTERLOCK -->
-  <section class="module" id="interlock">
+  <!-- §3 AGENTS -->
+  <section class="module" id="agents">
     <div class="wrap two-col">
       <div class="col-text">
-        <span class="plate-label">Write interlock</span>
-        <h2>An agent can't<br>touch prod.</h2>
+        <span class="plate-label">Automation</span>
+        <h2>Safe to hand<br>to an agent.</h2>
         <p class="prose">
-          Reads are always allowed. <span class="mono">--yes</span> authorizes a non-prod write
-          when there's no terminal, but it <em>never</em> authorizes prod. The only way to mutate
-          production is a human typing the environment's name at a real terminal, so an agent or a
-          CI job simply can't.
+          Every read command speaks <span class="mono">--json</span>, and <span class="mono">--dry-run</span>
+          prints the exact <span class="mono">gcloud</span> call without running it — so a script, CI, or an
+          LLM agent can see precisely what would happen. Reads are always allowed.
         </p>
-        <p class="prose dim">The same rule guards every write: opening a tunnel, creating a backup, setting a secret.</p>
+        <p class="prose dim">
+          A prod write needs a human at a real terminal. A non-interactive caller is refused, and
+          <span class="mono">--yes</span> <em>never</em> authorizes prod — so you can automate against
+          gcp-tui freely and still know production is out of reach.
+        </p>
       </div>
 
       <div class="col-art">
@@ -251,10 +276,10 @@
     </div>
   </section>
 
-  <!-- POWER ON / INSTALL -->
-  <section class="module band" id="install">
+  <!-- §4 INSTALL -->
+  <section class="module" id="install">
     <div class="wrap install-inner">
-      <span class="plate-label">Power on</span>
+      <span class="plate-label">Install</span>
       <h2>Install it in one line.</h2>
 
       <button class="copy big" id="copyInstall2" data-cmd="go install github.com/gpnaslund/gcp-tui@latest" aria-label="Copy install command">
