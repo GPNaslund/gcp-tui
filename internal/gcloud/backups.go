@@ -42,3 +42,14 @@ func CreateBackup(project, instance string) error {
 		"--project", project,
 	)
 }
+
+// CreateBackupCaptured triggers an on-demand backup, capturing gcloud's output
+// instead of streaming it to the terminal. The MCP server uses this rather than
+// CreateBackup because it reserves stdout for the JSON-RPC transport, so nothing
+// else may write there.
+func CreateBackupCaptured(project, instance string) ([]byte, error) {
+	return run.Output("gcloud", "sql", "backups", "create",
+		"--instance", instance,
+		"--project", project,
+	)
+}
