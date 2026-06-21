@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gcp-tui — a safe cockpit for Cloud SQL across environments</title>
+<meta name="description" content="gcp-tui binds every GCP environment to its own reserved loopback slot, so a connection string structurally tells you where it points. A safe, transparent terminal cockpit for the Cloud SQL Auth Proxy.">
+<meta name="theme-color" content="#1F1F28">
+<meta property="og:type" content="website">
+<meta property="og:title" content="gcp-tui — prod can never look like localhost">
+<meta property="og:description" content="A safe, transparent terminal cockpit for the Cloud SQL Auth Proxy. Every environment gets its own reserved loopback slot; agents can read but can't touch prod.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nameplate">
+  <div class="wrap nameplate-inner">
+    <a class="brand" href="#top"><span class="brand-lamp"></span>gcp-tui</a>
+    <nav class="nav-links">
+      <a href="#display">Display</a>
+      <a href="#map">Address map</a>
+      <a href="#interlock">Interlock</a>
+      <a href="#install">Install</a>
+      <a class="nav-gh" href="https://github.com/gpnaslund/gcp-tui">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <span class="plate-label">Open source · MIT · Go</span>
+        <h1>Prod can never<br>look like <span class="stamp-safe">localhost</span>.</h1>
+        <p class="lede">
+          <span class="kw">gcp-tui</span> gives every GCP environment its own reserved loopback address, so the
+          connection string itself tells you which one you're on. It's a transparent terminal
+          cockpit for the <span class="nowrap">Cloud SQL Auth Proxy</span>.
+        </p>
+        <div class="actions">
+          <button class="copy" id="copyInstall" data-cmd="go install github.com/gpnaslund/gcp-tui@latest" aria-label="Copy install command">
+            <span class="copy-prompt">$</span>
+            <span class="copy-cmd">go install github.com/gpnaslund/gcp-tui@latest</span>
+            <span class="copy-state" aria-hidden="true">copy</span>
+          </button>
+          <a class="ghost" href="https://github.com/gpnaslund/gcp-tui">View on GitHub →</a>
+        </div>
+      </div>
+
+      <!-- TERMINAL EXAMPLE -->
+      <figure class="screen-mount" id="display">
+        <div class="cockpit" role="img"
+             aria-label="The gcp-tui terminal cockpit: a two-pane view. The left pane lists environments — staging is live in green, prod is selected in red. The right pane inspects prod and shows an open-production-tunnel confirmation prompt asking the user to type the word prod.">
+          <div class="ck-bar">
+            <span class="ck-brand">gcp-tui</span>
+            <span class="ck-bar-right">
+              <span class="ck-acct">you@example.com</span>
+              <span class="ck-pill ok">● ADC</span>
+              <span class="ck-pill ok">● proxy</span>
+            </span>
+          </div>
+
+          <div class="ck-body">
+            <div class="ck-pane ck-left">
+              <div class="ck-cap">ENVIRONMENTS</div>
+              <div class="ck-row">
+                <span class="ck-name"><span class="ck-gutter ghost-gutter"> </span>staging</span>
+                <span class="t-cool">● live</span>
+              </div>
+              <div class="ck-row is-sel-hot">
+                <span class="ck-name"><span class="ck-gutter t-hot">▎</span><span class="t-hot bold">prod</span></span>
+                <span class="t-muted">○ idle</span>
+              </div>
+            </div>
+
+            <div class="ck-pane ck-right">
+              <div class="ck-insp-head">
+                <span class="t-hot bold">prod</span>
+                <span class="tag-prod">PROD</span>
+              </div>
+              <div class="ck-rule"></div>
+              <div class="ck-kv">
+                <span class="ck-k">slot</span>
+                <span class="ck-v t-hot bold">▸ 127.0.0.3:15434</span>
+                <span class="ck-tail t-muted">○ idle</span>
+              </div>
+              <div class="ck-kv">
+                <span class="ck-k">inst</span>
+                <span class="t-muted ck-ell">prod-project:europe-north2:prod-db</span>
+              </div>
+              <div class="ck-kv">
+                <span class="ck-k">auth</span>
+                <span>password · 1 profile(s)</span>
+              </div>
+              <div class="ck-confirm">
+                <div class="ck-warn">⚠ OPEN PRODUCTION TUNNEL</div>
+                <div class="ck-prompt">type <span class="t-hot">"prod"</span> to confirm: <span class="ck-cursor">▌</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ck-foot">
+            <span class="ck-key">↑↓</span> move
+            <span class="ck-key">⏎</span> tunnel
+            <span class="ck-key">L</span> logs
+            <span class="ck-key">D</span> dbs
+            <span class="ck-key">B</span> backups
+            <span class="ck-key">x</span> stop
+            <span class="ck-key">q</span> quit
+          </div>
+        </div>
+        <figcaption>Frozen on a prod tunnel request. Nothing opens until the name is typed back.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ADDRESS MAP -->
+  <section class="module" id="map">
+    <div class="wrap two-col">
+      <div class="col-text">
+        <span class="plate-label">Address map</span>
+        <h2>The address<br>is the warning.</h2>
+        <p class="prose">
+          Each environment gets its own loopback address and port, so the address itself
+          tells you where you are: staging on <span class="mono safe">127.0.0.2</span>,
+          prod on <span class="mono danger">127.0.0.3</span>. The interface colours everything to
+          match — <span class="safe">green</span> for the environments that are safe to poke at,
+          <span class="danger">red</span> for production.
+        </p>
+        <p class="prose dim">
+          There's no ambient default project and no guessing from your filesystem; the config
+          file you declare is the only source of truth. Before binding, a pre-flight check refuses
+          any slot that already has a listener on it.
+        </p>
+      </div>
+
+      <div class="col-art">
+        <div class="pinout">
+          <div class="pinout-head"><span>ENV</span><span>ADDRESS</span><span>STATE</span></div>
+          <div class="pin is-safe">
+            <span class="pin-env">staging</span>
+            <span class="pin-addr mono">127.0.0.2:15433</span>
+            <span class="pin-state"><span class="lamp safe"></span>open</span>
+          </div>
+          <code class="pin-conn mono">postgres://app@<span class="safe">127.0.0.2:15433</span>/db</code>
+
+          <div class="pin is-danger">
+            <span class="pin-env">prod</span>
+            <span class="pin-addr mono">127.0.0.3:15434</span>
+            <span class="pin-state"><span class="placard">CONFIRM</span></span>
+          </div>
+          <code class="pin-conn mono">postgres://app@<span class="danger">127.0.0.3:15434</span>/db</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PANEL FUNCTIONS -->
+  <section class="module band" id="functions">
+    <div class="wrap">
+      <span class="plate-label">Panel functions</span>
+      <h2>Built to keep you on one screen.</h2>
+      <div class="legend">
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>An in-terminal cockpit</h3>
+            <p>A two-pane view of environments and their profiles. Start background tunnels, watch their output stream in, and inspect databases, users, or backups without leaving the screen.</p>
+          </div>
+        </div>
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>Tunnels that clean up</h3>
+            <p>Proxies run as tracked background processes that are killed when you quit. They're session-scoped, so a normal exit never leaves a listener behind.</p>
+          </div>
+        </div>
+        <div class="func is-key">
+          <span class="lamp amber"></span>
+          <div>
+            <h3>Safe for agents to drive</h3>
+            <p>Read commands can emit <span class="mono">--json</span>, and <span class="mono">--dry-run</span> prints the exact <span class="mono">gcloud</span> call without running it. A prod write is impossible without a human at a terminal.</p>
+          </div>
+        </div>
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>Secrets stay off your shell</h3>
+            <p>Pull Secret Manager values into a gitignored <span class="mono">.env</span>; set new versions over stdin. Profile passwords live in your OS keyring, never in config.</p>
+          </div>
+        </div>
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>Every command is printed first</h3>
+            <p>Each external <span class="mono">gcloud</span> and proxy command is printed before it runs. Transparency is the point, because these commands can reach production.</p>
+          </div>
+        </div>
+        <div class="func">
+          <span class="lamp safe"></span>
+          <div>
+            <h3>It checks ADC, not just login</h3>
+            <p><span class="mono">doctor</span> validates your gcloud login and your Application Default Credentials, notices when either has expired, and offers to fix it.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WRITE INTERLOCK -->
+  <section class="module" id="interlock">
+    <div class="wrap two-col">
+      <div class="col-text">
+        <span class="plate-label">Write interlock</span>
+        <h2>An agent can't<br>touch prod.</h2>
+        <p class="prose">
+          Reads are always allowed. <span class="mono">--yes</span> authorizes a non-prod write
+          when there's no terminal, but it <em>never</em> authorizes prod. The only way to mutate
+          production is a human typing the environment's name at a real terminal, so an agent or a
+          CI job simply can't.
+        </p>
+        <p class="prose dim">The same rule guards every write: opening a tunnel, creating a backup, setting a secret.</p>
+      </div>
+
+      <div class="col-art">
+        <div class="matrix" role="table" aria-label="Write authorization matrix">
+          <div class="mx-row mx-head" role="row">
+            <span role="columnheader"></span>
+            <span role="columnheader">Human · TTY</span>
+            <span role="columnheader">Agent · no TTY</span>
+          </div>
+          <div class="mx-row" role="row">
+            <span class="mx-rowhead" role="rowheader">non-prod</span>
+            <span class="mx-cell allow" role="cell">allowed</span>
+            <span class="mx-cell warn" role="cell">--yes required</span>
+          </div>
+          <div class="mx-row" role="row">
+            <span class="mx-rowhead danger" role="rowheader">prod</span>
+            <span class="mx-cell allow" role="cell">typed confirm</span>
+            <span class="mx-cell deny" role="cell">refused</span>
+          </div>
+        </div>
+        <p class="matrix-note"><span class="danger">Refused</span> is final. <span class="mono">--yes</span> doesn't apply to prod.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- POWER ON / INSTALL -->
+  <section class="module band" id="install">
+    <div class="wrap install-inner">
+      <span class="plate-label">Power on</span>
+      <h2>Install it in one line.</h2>
+
+      <button class="copy big" id="copyInstall2" data-cmd="go install github.com/gpnaslund/gcp-tui@latest" aria-label="Copy install command">
+        <span class="copy-prompt">$</span>
+        <span class="copy-cmd">go install github.com/gpnaslund/gcp-tui@latest</span>
+        <span class="copy-state" aria-hidden="true">copy</span>
+      </button>
+
+      <p class="req">Requires the <a href="https://cloud.google.com/sdk/docs/install">gcloud CLI</a> and <a href="https://cloud.google.com/sql/docs/postgres/sql-proxy#install">cloud-sql-proxy</a> on your <span class="mono">PATH</span>.</p>
+
+      <ol class="steps">
+        <li><span class="step-n">01</span><div><code class="mono">gcp-tui doctor</code><span class="step-d">check prerequisites + auth, fix what's missing</span></div></li>
+        <li><span class="step-n">02</span><div><code class="mono">gcp-tui init</code><span class="step-d">discover Cloud SQL instances and add them</span></div></li>
+        <li><span class="step-n">03</span><div><code class="mono">gcp-tui</code><span class="step-d">open the cockpit</span></div></li>
+      </ol>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <span class="brand foot-brand"><span class="brand-lamp"></span>gcp-tui</span>
+    <span class="foot-meta">
+      <a href="https://github.com/gpnaslund/gcp-tui">GitHub</a>
+      <a href="https://github.com/gpnaslund/gcp-tui/blob/main/LICENSE">MIT License</a>
+    </span>
+    <span class="foot-note">Not affiliated with Google.</span>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    function wireCopy(btn) {
+      if (!btn) return;
+      var state = btn.querySelector('.copy-state');
+      var original = state ? state.textContent : 'copy';
+      btn.addEventListener('click', function () {
+        var cmd = btn.getAttribute('data-cmd');
+        navigator.clipboard.writeText(cmd).then(function () {
+          if (!state) return;
+          state.textContent = 'copied ✓';
+          btn.classList.add('copied');
+          setTimeout(function () {
+            state.textContent = original;
+            btn.classList.remove('copied');
+          }, 1600);
+        }).catch(function () {
+          if (state) state.textContent = 'copy failed';
+        });
+      });
+    }
+    wireCopy(document.getElementById('copyInstall'));
+    wireCopy(document.getElementById('copyInstall2'));
+  })();
+</script>
+
+</body>
+</html>
