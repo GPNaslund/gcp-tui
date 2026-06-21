@@ -1,11 +1,11 @@
 # gcp-tui
 
-A safe, transparent launcher for the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy) across multiple GCP environments.
+A safe, transparent launcher for the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy) across multiple GCP environments — with an interactive cockpit and an agent-friendly CLI.
 
 It exists to kill two recurring problems when you query staging/prod databases from a laptop:
 
 1. **"Which environment am I on?"** — every environment binds to a *distinct reserved loopback slot* (`127.0.0.2:15433`, `127.0.0.3:15434`, …), so a connection string structurally encodes its environment. Prod can never be mistaken for localhost.
-2. **Auth friction** — it checks the two credential systems gcloud uses (your user login *and* Application Default Credentials, which the proxy actually needs) and offers to run the right `gcloud auth` flow when one is missing.
+2. **Auth friction** — it checks the two credential systems gcloud uses (your user login *and* Application Default Credentials, which the proxy actually needs), validates that neither has expired, and offers to run the right `gcloud auth` flow when one is missing.
 
 Every external command it runs is printed before it runs. Nothing it does to your gcloud or Cloud SQL state is hidden.
 
@@ -20,13 +20,49 @@ Requires the [`gcloud` CLI](https://cloud.google.com/sdk/docs/install) and [`clo
 ## Usage
 
 ```sh
-gcp-tui doctor          # check prerequisites + auth, fix what's missing
-gcp-tui init            # discover Cloud SQL instances via gcloud, add them
-gcp-tui list            # show configured environments
-gcp-tui up staging      # start the proxy for an environment
+gcp-tui                       # launch the interactive TUI cockpit
+gcp-tui doctor                # check prerequisites + auth, fix what's missing
+gcp-tui status                # one-shot snapshot of auth, tools, and environments
+gcp-tui init                  # discover Cloud SQL instances via gcloud, add them
+gcp-tui list                  # show configured environments
+gcp-tui up staging            # start the proxy for an environment (foreground)
+gcp-tui down staging          # kill a stale listener on the environment's slot
+gcp-tui logs staging          # tail Cloud Logging for the environment's instance
+gcp-tui sql databases staging # list databases / users / describe the instance
+gcp-tui backups list staging  # list (and, gated, create) on-demand backups
 ```
 
-`init` queries gcloud for your projects and their Cloud SQL instances, auto-assigns the next free reserved slot, and defaults prod-looking environments to requiring typed confirmation. It only ever proposes entries — the config file is the source of truth.
+## The cockpit
+
+Run with no arguments to open the **TUI** — a two-pane cockpit (environments ↔ connection profiles) over the same core the CLI uses. The left pane lists environments with a live/idle slot pill; the right pane inspects the selected one (slot, instance, auth mode, profiles).
+
+It's built to keep you working without leaving the screen:
+
+- **Background tunnels.** `⏎` on an environment starts a *tracked background proxy* and auto-opens a **streaming log panel** seeded with the environment's connection string(s). The cockpit stays interactive, so several tunnels can be live at once. `x` stops the selected (or panelled) tunnel. Tunnels are **session-scoped**: every one this cockpit started is killed on quit, so a normal exit never leaks a proxy.
+- **In-cockpit read panels** (async, non-blocking) on the selected environment: `L` logs · `D` databases · `U` users · `I` instance describe · `B` backups.
+- **Prod gate.** Starting a tunnel for a `confirm = true` environment requires typing the environment name first — the cockpit equivalent of the CLI write gate. No tunnel runs for a protected env until the typed name matches.
+- **Quick actions:** `c` copy a profile's connection string · `p` add a profile · `i` discover instances · `s` pull secrets · `d` re-run doctor. `tab`/`→` focuses the profile list (`⏎`/`c` copies there); `q` or `ctrl+c` quits.
+
+The footer always shows the keys available in the current context.
+
+## Commands
+
+Beyond the proxy-control basics (`up`/`down`/`conn`/`profile`/`secrets`), the CLI exposes read surfaces over each environment's instance:
+
+- **`status`** — a one-shot snapshot: the active gcloud account, whether ADC is present and valid, which tools are installed (`gcloud`/`cloud-sql-proxy`/`psql`), and the environment→slot map.
+- **`logs <env>`** — `gcloud logging read` scoped to the environment's Cloud SQL instance, bounded by default. Flags: `--since` (gcloud freshness, default `1h`), `--severity` (e.g. `ERROR`), `--grep`, `--limit` (default `50`).
+- **`sql databases|users|describe <env>`** — list databases, list users, or describe the instance (version, region, state, tier, availability, disk, backup config, IPs).
+- **`backups list <env>`** — list automated and on-demand backups. **`backups create <env>`** takes an on-demand backup (a gated write — see below). There is deliberately **no restore**.
+
+## Agent-friendly
+
+The CLI is built so a non-interactive caller (a script, CI, or an LLM agent) can read freely and is *structurally* prevented from mutating production:
+
+- **`--json`** — every read command (`status`, `logs`, `sql …`, `backups list`) emits machine-readable JSON instead of the human table.
+- **`--dry-run`** — prints the exact `gcloud` command(s) that *would* run and exits without executing anything. Use it to see precisely what a command will do.
+- **Non-interactive write gate** — reads are always allowed. Non-prod writes (e.g. `backups create`, `secrets set`) need `--yes` when there's no interactive terminal. For `confirm = true` (prod) environments the write is **refused outright without an interactive TTY — and `--yes` never authorizes prod**. The only path to a prod write is a human typing the environment name at a real terminal, so an agent cannot mutate prod no matter what flags it passes.
+
+These are the foundations a future MCP server wraps; today they're plain flags.
 
 ## Config
 
@@ -49,8 +85,10 @@ instance = "my-prod-project:europe-north2:my-prod-db"
 address  = "127.0.0.3"
 port     = 15434
 iam_auth = false
-confirm  = true     # require typing "prod" before the tunnel starts
+confirm  = true     # require typing "prod" before a tunnel starts or a write runs
 ```
+
+`init` queries gcloud for your projects and their Cloud SQL instances, auto-assigns the next free reserved slot, and defaults prod-looking environments to `confirm = true`. It only ever proposes entries — the config file is the source of truth.
 
 Then connect with any client:
 
@@ -74,13 +112,26 @@ The **password is stored in your OS keyring** (Secret Service / Keychain / Crede
 
 The generated URL uses `sslmode=disable` because the local hop to the proxy is plaintext loopback (the proxy itself provides TLS to Cloud SQL); `sslmode=require` would fail against the proxy.
 
+## Secret Manager
+
+For environments backed by a GCP project you can manage Secret Manager values without leaving the tool:
+
+```sh
+gcp-tui secrets pull staging          # export selected secrets to a .env file
+gcp-tui secrets set prod DB_PASSWORD  # write a new secret version (creates if missing)
+gcp-tui secrets diff staging prod     # compare which secret names exist in each env
+```
+
+`secrets pull` offers a multi-select of the project's secrets and warns if the target `.env` isn't gitignored. `secrets set` prompts for the value with a masked input and pipes it to gcloud over stdin, so the secret never appears in your shell history or the process list; it is a gated write, honouring the same typed-confirmation rule as `up` for `confirm = true` environments.
+
 ## Safety model
 
 - **Distinct loopback IP + port per environment.** The strongest layer — the address itself tells you the environment. On macOS, non-`127.0.0.1` loopback IPs need `sudo ifconfig lo0 alias 127.0.0.2 up` (Linux routes all of `127.0.0.0/8` by default).
-- **Typed confirmation** for any environment with `confirm = true`.
+- **Typed confirmation** for any environment with `confirm = true`, before a tunnel starts or a write runs.
+- **Non-interactive write gate** — reads are unrestricted; non-prod writes need `--yes` off a TTY; prod writes are impossible without an interactive terminal, so automation can't reach production state.
 - **Pre-flight slot check** — refuses to start if the reserved address:port already has a listener (stale proxy or a squatter).
 - **Single source of truth** — declared config, never filesystem guessing.
 
-## Status
+## License
 
-v1: `doctor`, `init`, `list`, `up`. A Bubble Tea TUI front-end is planned on top of this core.
+[MIT](LICENSE)
