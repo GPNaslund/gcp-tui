@@ -7,6 +7,7 @@ import (
 	"github.com/mattn/go-isatty"
 
 	"github.com/gpnaslund/gcp-tui/internal/config"
+	"github.com/gpnaslund/gcp-tui/internal/gate"
 )
 
 // stdinIsTTY reports whether stdin is an interactive terminal. It is a package
@@ -33,21 +34,18 @@ var confirmFn = typedConfirm
 //
 // Reads never call this.
 func authorizeWrite(env config.Env) error {
-	if env.Confirm {
-		if !stdinIsTTY() {
-			return fmt.Errorf("refusing to write to protected environment %q without an interactive terminal; --yes does not apply to prod", env.Name)
-		}
+	switch gate.Decide(env.Confirm, stdinIsTTY(), flagYes) {
+	case gate.Allow:
+		return nil
+	case gate.TypedConfirm:
 		if !confirmFn(env.Name) {
 			return fmt.Errorf("aborted: confirmation did not match %q", env.Name)
 		}
 		return nil
+	default: // gate.Refuse
+		if env.Confirm {
+			return fmt.Errorf("refusing to write to protected environment %q without an interactive terminal; --yes does not apply to prod", env.Name)
+		}
+		return fmt.Errorf("refusing to write to %q non-interactively; pass --yes to authorize", env.Name)
 	}
-
-	if stdinIsTTY() {
-		return nil
-	}
-	if flagYes {
-		return nil
-	}
-	return fmt.Errorf("refusing to write to %q non-interactively; pass --yes to authorize", env.Name)
 }

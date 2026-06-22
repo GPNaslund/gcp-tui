@@ -39,17 +39,15 @@ func Echo(name string, args ...string) {
 	fmt.Fprintln(os.Stderr, cmdStyle.Render("$ "+line))
 }
 
-// Output runs a command, echoing it first, and returns its stdout. Stderr is
-// passed through so failures are visible.
+// Output runs a command, echoing it first, and returns its stdout. On failure
+// the command's stderr is folded into the returned error (see runCaptured).
 func Output(name string, args ...string) ([]byte, error) {
 	if DryRun {
 		printDryRun(name, args...)
 		return nil, ErrDryRun
 	}
 	Echo(name, args...)
-	cmd := exec.Command(name, args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Output()
+	return runCaptured(exec.Command(name, args...))
 }
 
 // OutputInput runs a command with input piped to its stdin, echoing only the
@@ -63,8 +61,26 @@ func OutputInput(input []byte, name string, args ...string) ([]byte, error) {
 	Echo(name, args...)
 	cmd := exec.Command(name, args...)
 	cmd.Stdin = bytes.NewReader(input)
-	cmd.Stderr = os.Stderr
-	return cmd.Output()
+	return runCaptured(cmd)
+}
+
+// runCaptured runs cmd and returns its stdout, folding the command's stderr into
+// the error when it fails. The caller has already echoed the command (see Echo),
+// so transparency is preserved; this only changes where a failure's stderr goes
+// — into the returned error rather than only to this process's stderr. That
+// matters for the MCP server: an agent sees a tool's error but never the
+// server's stderr, so without this it would get a bare "exit status 1" with no
+// hint of the real cause (an expired token, a missing instance, a denied call).
+func runCaptured(cmd *exec.Cmd) ([]byte, error) {
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return out, fmt.Errorf("%w: %s", err, msg)
+		}
+	}
+	return out, err
 }
 
 // Inherit runs a command wired to the current terminal, for interactive flows

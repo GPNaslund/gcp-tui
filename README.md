@@ -30,6 +30,7 @@ gcp-tui down staging          # kill a stale listener on the environment's slot
 gcp-tui logs staging          # tail Cloud Logging for the environment's instance
 gcp-tui sql databases staging # list databases / users / describe the instance
 gcp-tui backups list staging  # list (and, gated, create) on-demand backups
+gcp-tui mcp                   # run the MCP server (stdio) for an agent to drive
 ```
 
 ## The cockpit
@@ -62,7 +63,27 @@ The CLI is built so a non-interactive caller (a script, CI, or an LLM agent) can
 - **`--dry-run`** — prints the exact `gcloud` command(s) that *would* run and exits without executing anything. Use it to see precisely what a command will do.
 - **Non-interactive write gate** — reads are always allowed. Non-prod writes (e.g. `backups create`, `secrets set`) need `--yes` when there's no interactive terminal. For `confirm = true` (prod) environments the write is **refused outright without an interactive TTY — and `--yes` never authorizes prod**. The only path to a prod write is a human typing the environment name at a real terminal, so an agent cannot mutate prod no matter what flags it passes.
 
-These are the foundations a future MCP server wraps; today they're plain flags.
+These flags are also the foundation the MCP server is built on (below).
+
+## MCP server
+
+`gcp-tui mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, exposing the same environment-scoped operations as typed tools so an agent can drive them directly — no shelling out, no parsing tables.
+
+It is **headless by construction, and that is the safety mechanism**: an MCP server speaks JSON-RPC over stdio, so it has no interactive terminal. The write gate therefore refuses *every* write to a `confirm = true` (prod) environment — the exact invariant the CLI enforces, now holding for free. An agent can read any environment but can never mutate prod.
+
+- **Reads** (always allowed): `status`, `list_environments`, `sql_databases`, `sql_users`, `sql_describe`, `logs`, `backups_list`, `secrets_list`, `connection_string`.
+- **Gated writes**: `backups_create`, `secrets_set`. A protected environment is refused outright; a non-prod write additionally requires `authorize: true` on the call (the MCP equivalent of `--yes`).
+- **No secret exfiltration by default**: `secrets_list` returns names only (no values), and `connection_string` omits the stored password unless you pass `include_password: true`.
+
+Point an MCP client at it (for example, in a Claude Code / Claude Desktop config):
+
+```json
+{
+  "mcpServers": {
+    "gcp-tui": { "command": "gcp-tui", "args": ["mcp"] }
+  }
+}
+```
 
 ## Config
 
