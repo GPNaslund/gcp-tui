@@ -1,6 +1,21 @@
+<div align="center">
+
 # gcp-tui
 
-A safe, transparent launcher for the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy) across multiple GCP environments — with an interactive cockpit and an agent-friendly CLI.
+**Your whole Cloud SQL workflow, in one cockpit.**
+
+A safe, transparent launcher for the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy) across multiple GCP environments — an interactive TUI, an agent-friendly CLI, and an [MCP](https://modelcontextprotocol.io) server where **prod is structurally unwritable**.
+
+[![Release](https://img.shields.io/github/v/release/GPNaslund/gcp-tui?style=flat-square&color=7E9CD8)](https://github.com/GPNaslund/gcp-tui/releases)
+&nbsp;![Go](https://img.shields.io/github/go-mod/go-version/GPNaslund/gcp-tui?style=flat-square&color=7AA89F&logo=go&logoColor=white)
+&nbsp;![MCP server](https://img.shields.io/badge/MCP-server-957FB8?style=flat-square)
+&nbsp;[![License: MIT](https://img.shields.io/badge/license-MIT-DCD7BA?style=flat-square)](LICENSE)
+
+[Install](#install) · [The cockpit](#the-cockpit) · [Agent-friendly](#agent-friendly) · [MCP server](#mcp-server) · [Safety model](#safety-model)
+
+![gcp-tui — the cockpit and CLI in action](docs/demo.gif)
+
+</div>
 
 It exists to kill two recurring problems when you query staging/prod databases from a laptop:
 
